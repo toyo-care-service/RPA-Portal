@@ -394,6 +394,17 @@ tr:hover {
     box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
 }
 
+.btn-secondary {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+}
+
+.btn-secondary:hover {
+    background: rgba(45, 55, 72, 0.8);
+    border-color: var(--text-muted);
+}
+
 .btn-ghost {
     color: var(--text-muted);
 }
@@ -687,6 +698,11 @@ tr:hover {
     display: block;
 }
 
+.tab-pane.active.flex-pane {
+    display: flex;
+    flex-direction: column;
+}
+
 /* Detail Content Stats */
 .detail-stats-grid {
     display: grid;
@@ -930,4 +946,229 @@ textarea.form-control {
     border-color: var(--primary);
     background: rgba(59, 130, 246, 0.1);
     color: var(--primary);
+}
+
+/* Schedule Timeline UI */
+.schedule-container {
+    overflow: hidden;
+}
+
+.schedule-layout {
+    display: flex;
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.4);
+}
+
+.schedule-sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: rgba(30, 41, 59, 0.8);
+    display: flex;
+    flex-direction: column;
+}
+
+.schedule-terminal-list {
+    flex: 1;
+    overflow-y: hidden;
+}
+
+.schedule-cell {
+    height: 60px;
+    padding: 0 var(--spacing-md);
+    display: flex;
+    align-items: center;
+    border-bottom: 1px dashed rgba(148, 163, 184, 0.1);
+    color: var(--text-main);
+    font-size: 0.9rem;
+}
+
+.header-cell {
+    height: 40px;
+    font-weight: bold;
+    color: var(--text-muted);
+    background: rgba(15, 23, 42, 0.9);
+    border-bottom: 1px solid var(--border);
+}
+
+.schedule-timeline-wrapper {
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: auto;
+    position: relative;
+    /* Hide scrollbar for cleaner look if preferred, but keep for usability */
+}
+
+.schedule-timeline {
+    width: 1440px; /* 24 hours * 60px/hour */
+    position: relative;
+    background-image: linear-gradient(to right, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+    background-size: 60px 100%;
+}
+
+.timeline-headers {
+    display: flex;
+    height: 40px;
+    background: rgba(15, 23, 42, 0.9);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.time-header-slot {
+    width: 60px;
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding-left: 4px;
+    padding-top: 8px;
+    border-left: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.timeline-row {
+    height: 60px;
+    position: relative;
+    border-bottom: 1px dashed rgba(148, 163, 184, 0.1);
+}
+
+.schedule-block {
+    position: absolute;
+    height: 40px;
+    top: 10px;
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    transition: transform 0.2s, z-index 0.2s;
+}
+
+.schedule-block:hover {
+    transform: scale(1.02);
+    z-index: 10;
+    box-shadow: var(--shadow-md);
+}
+
+.sch-status-success { background: rgba(16, 185, 129, 0.8); border: 1px solid #10B981; }
+.sch-status-error { background: rgba(239, 68, 68, 0.8); border: 1px solid #EF4444; }
+.sch-status-running { 
+    background: rgba(59, 130, 246, 0.8); border: 1px solid #3B82F6;
+    animation: pulse-bg 2s infinite;
+}
+.sch-status-pending { 
+    background: rgba(100, 116, 139, 0.4); border: 1px dashed rgba(148, 163, 184, 0.5); color: var(--text-muted);
+}
+
+.current-time-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background-color: var(--danger);
+    z-index: 5;
+    pointer-events: none;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+}
+.current-time-line::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -4px;
+    width: 10px;
+    height: 10px;
+    background-color: var(--danger);
+    border-radius: 50%;
+}
+
+.status-dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.bg-success { background-color: #10B981; }
+.bg-danger { background-color: #EF4444; }
+.bg-primary { background-color: #3B82F6; }
+.bg-gray { background-color: #64748B; }
+
+@keyframes pulse-bg {
+    0% { opacity: 0.8; }
+    50% { opacity: 1; box-shadow: 0 0 15px rgba(59, 130, 246, 0.6); }
+    100% { opacity: 0.8; }
+}
+
+/* Calendar View */
+.calendar-grid {
+    width: 100%;
+}
+.calendar-header-cell {
+    text-align: center;
+    font-size: 0.8rem;
+    padding: 4px;
+    background: rgba(15, 23, 42, 0.8);
+    color: var(--text-muted);
+    font-weight: bold;
+    border-radius: var(--radius-sm);
+}
+.calendar-cell {
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    overflow: hidden;
+}
+.calendar-cell.today {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--primary);
+}
+.calendar-cell.other-month {
+    opacity: 0.3;
+}
+.calendar-date-label {
+    font-size: 0.85rem;
+    font-weight: bold;
+    margin-bottom: 6px;
+    color: var(--text-main);
+    text-align: right;
+}
+.calendar-event {
+    font-size: 0.7rem;
+    padding: 4px 6px;
+    color: white;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: transform 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.calendar-event:hover {
+    transform: scale(1.02);
+    z-index: 10;
+}
+
+/* Utility Classes */
+.whitespace-nowrap {
+    white-space: nowrap;
+}
+.flex-wrap {
+    flex-wrap: wrap;
 }

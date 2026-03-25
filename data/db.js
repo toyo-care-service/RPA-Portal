@@ -525,7 +525,23 @@ window.initialData = {
         }
     ],
 
-    runs: [],
+    terminals: [
+        { id: "term-01", name: "PC-A01 (経理)", status: "online" },
+        { id: "term-02", name: "PC-B02 (営業)", status: "online" },
+        { id: "term-03", name: "仮想サーバー01", status: "online" }
+    ],
+
+    schedules: [
+        { id: "sch-01", rpaId: "rpa-001", terminalId: "term-01", startTime: "09:00", endTime: "10:30", frequency: "daily" },
+        { id: "sch-02", rpaId: "rpa-003", terminalId: "term-02", startTime: "13:00", endTime: "14:00", frequency: "weekly" },
+        { id: "sch-03", rpaId: "rpa-005", terminalId: "term-03", startTime: "02:00", endTime: "05:00", frequency: "daily" }
+    ],
+
+    runs: [
+        { id: "run-001", rpaId: "rpa-001", scheduleId: "sch-01", status: "success", executedAt: "2026-03-24T09:00:00Z" },
+        { id: "run-002", rpaId: "rpa-003", scheduleId: "sch-02", status: "running", executedAt: "2026-03-25T13:00:00Z" },
+        { id: "run-003", rpaId: "rpa-005", scheduleId: "sch-03", status: "error", executedAt: "2026-03-24T02:00:00Z" }
+    ],
 
     recordings: [],
 

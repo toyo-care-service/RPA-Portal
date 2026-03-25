@@ -36,6 +36,10 @@
                     <i data-feather="list"></i>
                     <span>RPA一覧</span>
                 </a>
+                <a href="#schedule" class="nav-item" data-page="schedule">
+                    <i data-feather="calendar"></i>
+                    <span>稼働スケジュール</span>
+                </a>
                 <a href="#backlog" class="nav-item" data-page="backlog">
                     <i data-feather="trello"></i>
                     <span>開発バックログ</span>
@@ -504,6 +508,94 @@
                     </form>
                 </div>
 
+                <!-- Schedule Template -->
+                <div id="view-schedule" class="view-section" style="display: none;">
+                    <div class="glass-panel schedule-container" style="display: flex; flex-direction: column; height: calc(100vh - 150px);">
+                        <header class="flex flex-wrap items-center justify-between mb-4 gap-y-3">
+                            <div class="flex flex-wrap items-center gap-2 md:gap-3">
+                                <div class="flex bg-slate-800 rounded-md p-1 border border-slate-700 whitespace-nowrap">
+                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors active tab-btn text-main" data-tab="timeline">タイムライン</button>
+                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors tab-btn text-muted" data-tab="calendar">カレンダー</button>
+                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors tab-btn text-muted" data-tab="list">一覧リスト</button>
+                                </div>
+
+                                <div class="flex items-center gap-1 whitespace-nowrap">
+                                    <button id="add-schedule-btn" class="btn btn-primary" style="padding: 4px 10px; font-size: 0.8rem;" onclick="App.showScheduleModal()">
+                                        <i data-feather="plus" width="14"></i> <span><span class="hidden md:inline">予定を</span>追加</span>
+                                    </button>
+                                    <button id="manage-terminals-btn" class="btn btn-ghost" style="padding: 4px 10px; font-size: 0.8rem;" onclick="App.showTerminalModal()">
+                                        <i data-feather="server" width="14"></i> 端末管理
+                                    </button>
+                                </div>
+                            </div>
+                        </header>
+                        
+                        <!-- Timeline View -->
+                        <div id="tab-timeline" class="tab-pane active flex-pane" style="flex: 1; min-height: 0;">
+                            <div class="flex flex-wrap items-center gap-2 md:gap-3 mb-4">
+                                <label class="text-sm text-muted font-bold whitespace-nowrap">表示日付:</label>
+                                <div class="flex items-center">
+                                    <button class="btn btn-ghost btn-sm px-2" onclick="App.changeScheduleDate(-1)"><i data-feather="chevron-left"></i></button>
+                                    <input type="date" id="schedule-date-filter" class="form-control text-sm font-bold" style="width: auto; padding: 4px 8px; margin: 0 4px;" onchange="App.renderSchedule()">
+                                    <button class="btn btn-ghost btn-sm px-2" onclick="App.changeScheduleDate(1)"><i data-feather="chevron-right"></i></button>
+                                </div>
+                                <button class="btn btn-secondary btn-sm ml-2" onclick="App.resetScheduleDate()">今日</button>
+                            </div>
+                            
+                            <div class="schedule-layout">
+                            <div class="schedule-sidebar" id="schedule-sidebar">
+                                <div class="schedule-cell header-cell border-b">端末 / リソース</div>
+                                <div id="schedule-terminal-list" class="schedule-terminal-list"></div>
+                            </div>
+                            
+                            <div class="schedule-timeline-wrapper" id="timeline-wrapper">
+                                <div class="schedule-timeline" id="timeline-content">
+                                    <div class="timeline-headers" id="timeline-headers"></div>
+                                    <div class="timeline-rows" id="timeline-rows"></div>
+                                    <div class="current-time-line" id="current-time-line"></div>
+                                </div>
+                            </div>
+                        </div> <!-- Closes schedule-layout -->
+                    </div> <!-- Closes tab-timeline -->
+
+                    <!-- Calendar View -->
+                    <div id="tab-calendar" class="tab-pane flex-pane" style="flex: 1; overflow: hidden;">
+                            <div class="flex items-center gap-4 mb-3 mt-2">
+                                <button class="btn btn-ghost btn-sm" onclick="App.changeCalendarMonth(-1)"><i data-feather="chevron-left"></i></button>
+                                <h3 class="text-lg font-bold w-32 text-center" id="calendar-month-title">--年--月</h3>
+                                <button class="btn btn-ghost btn-sm" onclick="App.changeCalendarMonth(1)"><i data-feather="chevron-right"></i></button>
+                                <button class="btn btn-secondary btn-sm ml-2" onclick="App.resetCalendarMonth()">今月</button>
+                            </div>
+                            
+                            <div style="flex: 1; overflow-y: auto; padding-right: 8px; padding-bottom: 8px;">
+                                <div class="calendar-grid" id="calendar-grid" style="display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: minmax(100px, auto); gap: 6px;">
+                                    <!-- JS Generated Calendar -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- List View -->
+                        <div id="tab-list" class="tab-pane" style="flex: 1; overflow-y: auto;">
+                            <div class="table-container mt-2">
+                                <table class="data-table" id="schedule-list-table">
+                                    <thead>
+                                        <tr>
+                                            <th>RPA名称</th>
+                                            <th>割当端末</th>
+                                            <th>実行頻度</th>
+                                            <th>開始時間</th>
+                                            <th>終了時間</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="schedule-list-body">
+                                        <!-- JS Generated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Data Management Template -->
                 <div id="view-data" class="view-section" style="display: none;">
                     <div class="glass-panel mb-6">
@@ -583,6 +675,116 @@
                     <button type="submit" class="btn btn-primary">保存</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Schedule Registration Modal -->
+    <div id="schedule-modal" class="modal-overlay">
+        <div class="modal-content glass-panel">
+            <h3 id="sch-modal-title" class="mb-4">スケジュールの登録</h3>
+            <form id="sch-form" onsubmit="event.preventDefault(); App.saveSchedule();">
+                <input type="hidden" id="sch-id">
+                <div class="form-group mb-4">
+                    <label class="form-label">対象RPA <span class="text-red-400">*</span></label>
+                    <select id="sch-rpa" class="form-select" required>
+                        <option value="">選択してください</option>
+                        <!-- JS Generated -->
+                    </select>
+                </div>
+                <div class="form-group mb-4">
+                    <label class="form-label">割り当て端末 <span class="text-red-400">*</span></label>
+                    <select id="sch-terminal" class="form-select" required>
+                        <option value="">選択してください</option>
+                        <!-- JS Generated -->
+                    </select>
+                </div>
+                <div class="form-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 1rem;">
+                    <div class="form-group">
+                        <label class="form-label">開始時間 <span class="text-red-400">*</span></label>
+                        <input type="time" id="sch-start" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">終了時間 <span class="text-red-400">*</span></label>
+                        <input type="time" id="sch-end" class="form-control" required>
+                    </div>
+                </div>
+                <div class="form-group mb-4">
+                    <label class="form-label">繰り返し</label>
+                    <select id="sch-frequency" class="form-select">
+                        <option value="daily">毎日 (Daily)</option>
+                        <option value="weekdays">平日のみ (Weekdays)</option>
+                        <option value="weekly">毎週 (Weekly)</option>
+                        <option value="monthly">毎月 (Monthly)</option>
+                        <option value="end_of_month">毎月の月末 (End of Month)</option>
+                        <option value="once">1回のみ (Once)</option>
+                    </select>
+                </div>
+                <div class="form-group mb-4" id="sch-weekly-options" style="display: none;">
+                    <label class="form-label">曜日 <span class="text-red-400">*</span></label>
+                    <select id="sch-day-of-week" class="form-select">
+                        <option value="1">月曜日</option>
+                        <option value="2">火曜日</option>
+                        <option value="3">水曜日</option>
+                        <option value="4">木曜日</option>
+                        <option value="5">金曜日</option>
+                        <option value="6">土曜日</option>
+                        <option value="0">日曜日</option>
+                    </select>
+                </div>
+                <div class="form-group mb-4" id="sch-monthly-options" style="display: none;">
+                    <label class="form-label">日付 <span class="text-red-400">*</span></label>
+                    <input type="number" id="sch-day-of-month" class="form-control" min="1" max="31" placeholder="例: 15">
+                </div>
+                <div class="form-group mb-4" id="sch-once-options" style="display: none;">
+                    <label class="form-label">指定日 <span class="text-red-400">*</span></label>
+                    <input type="date" id="sch-once-date" class="form-control">
+                </div>
+                <div class="flex justify-between mt-6">
+                    <button type="button" id="sch-delete-btn" class="btn btn-danger" style="display:none; color: #FCA5A5; background: rgba(220, 38, 38, 0.2);" onclick="App.deleteSchedule()">
+                        <i data-feather="trash-2" width="14"></i> 削除
+                    </button>
+                    <div class="flex gap-3 ml-auto">
+                        <button type="button" class="btn btn-ghost" onclick="App.hideScheduleModal()">キャンセル</button>
+                        <button type="submit" class="btn btn-primary">保存</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Terminal Management Modal -->
+    <div id="terminal-modal" class="modal-overlay">
+        <div class="modal-content glass-panel" style="max-width: 600px;">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="term-modal-title">端末・リソース管理</h3>
+                <button type="button" class="btn btn-ghost" onclick="App.hideTerminalModal()"><i data-feather="x"></i></button>
+            </div>
+            
+            <div class="glass-panel" style="background: rgba(255,255,255,0.03); margin-bottom: 1.5rem; padding: 1rem;">
+                <h4 id="term-form-title" class="text-sm font-bold text-muted mb-3">新しい端末を追加</h4>
+                <div class="flex gap-2 items-center">
+                    <input type="hidden" id="term-edit-id">
+                    <input type="color" id="term-new-color" value="#3b82f6" class="form-control" style="width: 40px; height: 38px; padding: 2px; cursor: pointer;" title="テーマカラー">
+                    <input type="text" id="term-new-name" class="form-control" placeholder="端末名 (例: PC-C03)" style="flex: 1;">
+                    <button type="button" id="term-save-btn" class="btn btn-primary btn-sm" onclick="App.saveTerminal()"><i data-feather="plus"></i> 追加</button>
+                    <button type="button" id="term-cancel-btn" class="btn btn-ghost btn-sm" style="display: none;" onclick="App.cancelEditTerminal()">キャンセル</button>
+                </div>
+            </div>
+
+            <div class="table-container" style="max-height: 300px; overflow-y: auto;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>端末名</th>
+                            <th>ステータス</th>
+                            <th class="text-right">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="terminal-list-body">
+                        <!-- JS Generated -->
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </body>

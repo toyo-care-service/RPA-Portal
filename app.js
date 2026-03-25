@@ -28,7 +28,9 @@ const App = {
         filterBacklogPriority: '',
         filterBacklogStatus: '',
         sortBacklogBy: 'priority',
-        sortBacklogDesc: true
+        sortBacklogDesc: true,
+        // Calendar State
+        calendarDate: new Date()
     },
 
     config: {
@@ -84,6 +86,11 @@ const App = {
             } else {
                 this.loadLocalData();
             }
+
+            // Ensure missing top-level arrays exist (especially after db structure update)
+            if (!this.data.terminals) this.data.terminals = window.initialData?.terminals || [];
+            if (!this.data.schedules) this.data.schedules = window.initialData?.schedules || [];
+            if (!this.data.runs) this.data.runs = [];
 
             // Default Quick Links if none exist
             if (!this.data.quickLinks || this.data.quickLinks.length === 0) {
@@ -189,6 +196,8 @@ const App = {
         const adminElements = [
             'add-rpa-btn',
             'add-backlog-btn',
+            'add-schedule-btn',
+            'manage-terminals-btn',
             'btn-import',
             'btn-reset'
         ];
@@ -327,6 +336,17 @@ const App = {
         document.getElementById('add-backlog-btn')?.addEventListener('click', () => {
             this.showBacklogForm();
         });
+
+        // Schedule Frequency Toggle
+        const schFreq = document.getElementById('sch-frequency');
+        if (schFreq) {
+            schFreq.addEventListener('change', (e) => {
+                const val = e.target.value;
+                document.getElementById('sch-weekly-options').style.display = val === 'weekly' ? 'block' : 'none';
+                document.getElementById('sch-monthly-options').style.display = val === 'monthly' ? 'block' : 'none';
+                document.getElementById('sch-once-options').style.display = val === 'once' ? 'block' : 'none';
+            });
+        }
     },
 
     handleRoute() {
@@ -386,6 +406,7 @@ const App = {
         // Page Title update
         const pageTitles = {
             'dashboard': 'ダッシュボード',
+            'schedule': '稼働スケジュール',
             'rpas': 'RPA一覧',
             'rpa-detail': 'RPA詳細',
             'backlog': '開発バックログ',
@@ -396,6 +417,8 @@ const App = {
         // Render Page Content
         if (page === 'dashboard') {
             this.renderDashboard();
+        } else if (page === 'schedule') {
+            this.renderSchedule();
         } else if (page === 'rpas') {
             this.renderRpaList();
         } else if (page === 'backlog') {
@@ -1316,6 +1339,519 @@ const App = {
         this.data.quickLinks = this.data.quickLinks.filter(q => q.id !== id);
         this.saveData();
         this.renderQuickLinks();
+    },
+
+    // --- Schedule Timeline (Gantt) ---
+
+    renderSchedule() {
+        if(!this.data.terminals || !this.data.schedules) return;
+
+        // Date selection
+        const dateInput = document.getElementById('schedule-date-filter');
+        if (!dateInput.value) {
+            // YYYY-MM-DD local timezone
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            dateInput.value = `${year}-${month}-${day}`;
+        }
+        
+        const selectedDate = new Date(dateInput.value);
+        const targetDate = selectedDate;
+        const dayOfWeek = targetDate.getDay(); // 0(Sun) - 6(Sat)
+        const dayOfMonth = targetDate.getDate();
+        const isLastDayOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate() === dayOfMonth;
+
+        // 1. ヘッダーの描画 (0:00 - 23:00)
+        const headersHtml = Array.from({length: 24}, (_, i) => `<div class="time-header-slot">${i}:00</div>`).join('');
+        document.getElementById('timeline-headers').innerHTML = headersHtml;
+
+        // 2. 端末リストとタイムライン行の描画
+        let terminalsHtml = '';
+        let rowsHtml = '';
+
+        this.data.terminals.forEach(terminal => {
+            terminalsHtml += `<div class="schedule-cell row-header"><span style="display:inline-block; width:10px; height:10px; border-radius:2px; background-color:${terminal.color || '#3b82f6'}; margin-right:6px;"></span> ${terminal.name}</div>`;
+            
+            const termSchedules = this.data.schedules.filter(s => {
+                if (s.terminalId !== terminal.id) return false;
+                if (!s.frequency || s.frequency === 'daily') return true;
+                if (s.frequency === 'weekdays' && dayOfWeek !== 0 && dayOfWeek !== 6) return true;
+                if (s.frequency === 'weekly' && Number(s.dayOfWeek) === dayOfWeek) return true;
+                if (s.frequency === 'monthly' && Number(s.dayOfMonth) === dayOfMonth) return true;
+                if (s.frequency === 'end_of_month' && isLastDayOfMonth) return true;
+                if (s.frequency === 'once' && s.date === dateInput.value) return true;
+                return false;
+            });
+
+            let blocksHtml = '';
+
+            termSchedules.forEach(sch => {
+                const rpa = this.data.rpas.find(r => r.id === sch.rpaId);
+                if(!rpa) return;
+
+                const startMins = this.timeToMinutes(sch.startTime);
+                const endMins = this.timeToMinutes(sch.endTime);
+                const widthPx = Math.max(endMins - startMins, 15); // 最低15px幅を確保
+
+                // ステータス判定 (最新のrunsから取得)
+                const runModes = this.data.runs.filter(r => r.scheduleId === sch.id).sort((a,b) => new Date(b.executedAt) - new Date(a.executedAt));
+                const latestRun = runModes.length > 0 ? runModes[0] : null;
+                
+                let statusDotHtml = '';
+                if(latestRun) {
+                    if(latestRun.status === 'success') statusDotHtml = '<span class="bg-success" style="width:6px; height:6px; display:inline-block; border-radius:50%; margin-right:4px; box-shadow: 0 0 2px rgba(0,0,0,0.5);"></span>';
+                    if(latestRun.status === 'error') statusDotHtml = '<span class="bg-danger" style="width:6px; height:6px; display:inline-block; border-radius:50%; margin-right:4px; box-shadow: 0 0 2px rgba(0,0,0,0.5);"></span>';
+                    if(latestRun.status === 'running') statusDotHtml = '<span class="bg-primary" style="width:6px; height:6px; display:inline-block; border-radius:50%; margin-right:4px; box-shadow: 0 0 2px rgba(0,0,0,0.5);"></span>';
+                }
+
+                let iconName = sch.frequency === 'daily' ? 'refresh-cw' : 'calendar';
+                // Only allow click if admin
+                const clickEvent = this.state.isAdmin ? `onclick="App.showScheduleModal('${sch.id}')"` : '';
+                const cursorStyle = this.state.isAdmin ? 'cursor: pointer;' : 'cursor: default;';
+
+                const tColor = terminal.color || '#3b82f6';
+                const bgRgba = this.hexToRgba(tColor, 0.2);
+
+                blocksHtml += `
+                    <div class="schedule-block" style="left: ${startMins}px; width: ${widthPx}px; border-left: 3px solid ${tColor}; background-color: ${bgRgba}; ${cursorStyle}" title="${rpa.name}\n${sch.startTime} - ${sch.endTime}" ${clickEvent}>
+                        <div class="truncate flex items-center" style="font-size: 11px; margin-bottom: 2px;">${statusDotHtml}<i data-feather="${iconName}" style="width:10px; height:10px; margin-right:4px;"></i> ${rpa.name}</div>
+                        <div style="font-size: 9px; opacity: 0.8;">${sch.startTime} - ${sch.endTime}</div>
+                    </div>
+                `;
+            });
+
+            rowsHtml += `<div class="timeline-row">${blocksHtml}</div>`;
+        });
+
+        document.getElementById('schedule-terminal-list').innerHTML = terminalsHtml;
+        document.getElementById('timeline-rows').innerHTML = rowsHtml;
+
+        // 3. 現在時刻バーの更新
+        this.updateCurrentTimeLine();
+        if (this.timelineInterval) clearInterval(this.timelineInterval);
+        this.timelineInterval = setInterval(() => this.updateCurrentTimeLine(), 60000); // 1分ごとに更新
+        
+        // 4. スクロール同期 (縦スクロール時に端末リストも動かす)
+        const wrapper = document.getElementById('timeline-wrapper');
+        const sidebarList = document.getElementById('schedule-terminal-list');
+        // リスナーの重複登録を避けるため、一度削除またはクローン
+        const newWrapper = wrapper.cloneNode(true);
+        wrapper.parentNode.replaceChild(newWrapper, wrapper);
+        
+        newWrapper.addEventListener('scroll', () => {
+            sidebarList.style.transform = `translateY(-${newWrapper.scrollTop}px)`;
+        });
+
+        // setTimeout is needed because cloning the node resets the scroll position
+        setTimeout(() => {
+           if (window.feather) feather.replace();
+        }, 0);
+        
+        // Populate List View and Calendar View
+        this.renderScheduleList();
+        this.renderCalendar();
+    },
+
+    changeScheduleDate(offset) {
+        const input = document.getElementById('schedule-date-filter');
+        if (!input) return;
+        
+        let currentDate = input.value ? new Date(input.value) : new Date();
+        currentDate.setDate(currentDate.getDate() + offset);
+        
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(currentDate.getDate()).padStart(2, '0');
+        
+        input.value = `${year}-${month}-${day}`;
+        this.renderSchedule();
+    },
+
+    resetScheduleDate() {
+        const input = document.getElementById('schedule-date-filter');
+        if (!input) return;
+        
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        
+        input.value = `${year}-${month}-${day}`;
+        this.renderSchedule();
+    },
+
+    changeCalendarMonth(delta) {
+        this.state.calendarDate.setMonth(this.state.calendarDate.getMonth() + delta);
+        this.renderCalendar();
+    },
+
+    resetCalendarMonth() {
+        this.state.calendarDate = new Date();
+        this.renderCalendar();
+    },
+
+    renderCalendar() {
+        const grid = document.getElementById('calendar-grid');
+        const title = document.getElementById('calendar-month-title');
+        if (!grid || !title) return;
+
+        const year = this.state.calendarDate.getFullYear();
+        const month = this.state.calendarDate.getMonth();
+        
+        title.textContent = `${year}年${month + 1}月`;
+
+        // Generate headers
+        const daysOfWeek = ['日', '月', '火', '水', '木', '金', '土'];
+        let html = daysOfWeek.map(d => `<div class="calendar-header-cell">${d}</div>`).join('');
+
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        
+        const startPadding = firstDay.getDay(); // 0(Sun) - 6(Sat)
+        const totalDays = lastDay.getDate();
+        
+        // previous month padding
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
+        for(let i = startPadding - 1; i >= 0; i--) {
+            html += `<div class="calendar-cell other-month"><div class="calendar-date-label">${prevMonthLastDay - i}</div></div>`;
+        }
+
+        const today = new Date();
+        const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+
+        for(let day = 1; day <= totalDays; day++) {
+            const currentDate = new Date(year, month, day);
+            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const dayOfWeek = currentDate.getDay();
+            
+            const isToday = isCurrentMonth && day === today.getDate();
+            let cls = `calendar-cell ${isToday ? 'today' : ''}`;
+            
+            const isLastDayOfMonth = day === totalDays;
+
+            // Find schedules for this day
+            const daySchedules = this.data.schedules.filter(s => {
+                if (!s.frequency || s.frequency === 'daily') return true;
+                if (s.frequency === 'weekdays' && dayOfWeek !== 0 && dayOfWeek !== 6) return true;
+                if (s.frequency === 'weekly' && Number(s.dayOfWeek) === dayOfWeek) return true;
+                if (s.frequency === 'monthly' && Number(s.dayOfMonth) === day) return true;
+                if (s.frequency === 'end_of_month' && isLastDayOfMonth) return true;
+                if (s.frequency === 'once' && s.date === dateStr) return true;
+                return false;
+            });
+
+            // Sort by time
+            daySchedules.sort((a,b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
+
+            let eventsHtml = daySchedules.map(sch => {
+                const rpa = this.data.rpas.find(r => r.id === sch.rpaId);
+                const term = this.data.terminals.find(t => t.id === sch.terminalId);
+                if (!rpa) return '';
+                
+                const tColor = term?.color || '#3b82f6';
+                let bgStyle = `background: ${this.hexToRgba(tColor, 0.7)};`;
+
+                // Status background based on last run (optional visual enhancement)
+                const runModes = this.data.runs.filter(r => r.scheduleId === sch.id).sort((a,b) => new Date(b.executedAt) - new Date(a.executedAt));
+                const latestRun = runModes.length > 0 ? runModes[0] : null;
+                
+                let statusDotHtml = '';
+                if(latestRun) {
+                    if(latestRun.status === 'success') statusDotHtml = '<span class="bg-success" style="width:6px; height:6px; display:inline-block; border-radius:50%; margin-right:2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);"></span>';
+                    if(latestRun.status === 'error') statusDotHtml = '<span class="bg-danger" style="width:6px; height:6px; display:inline-block; border-radius:50%; margin-right:2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);"></span>';
+                    if(latestRun.status === 'running') statusDotHtml = '<span class="bg-primary" style="width:6px; height:6px; display:inline-block; border-radius:50%; margin-right:2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);"></span>';
+                }
+
+                let iconName = (sch.frequency === 'daily' || sch.frequency === 'weekdays') ? 'refresh-cw' : 'calendar';
+                const clickEvent = this.state.isAdmin ? `onclick="App.showScheduleModal('${sch.id}')"` : '';
+                return `
+                    <div class="calendar-event" style="${bgStyle}" title="${rpa.name} (${term?.name || '端末未定'})\n${sch.startTime}-${sch.endTime}" ${clickEvent}>
+                        ${statusDotHtml}
+                        <i data-feather="${iconName}" style="width:10px; height:10px; flex-shrink:0;"></i>
+                        <span class="truncate ml-1">${sch.startTime} ${rpa.name}</span>
+                    </div>
+                `;
+            }).join('');
+
+            html += `<div class="${cls}">
+                <div class="calendar-date-label">${day}</div>
+                ${eventsHtml}
+            </div>`;
+        }
+
+        // next month padding to complete the grid
+        const totalCells = startPadding + totalDays;
+        const totalRows = Math.ceil(totalCells / 7);
+        const endPadding = (totalRows * 7) - totalCells;
+        for(let i = 1; i <= endPadding; i++) {
+            html += `<div class="calendar-cell other-month"><div class="calendar-date-label">${i}</div></div>`;
+        }
+
+        grid.innerHTML = html;
+        if (window.feather) feather.replace();
+    },
+
+    renderScheduleList() {
+        const tbody = document.getElementById('schedule-list-body');
+        if (!tbody) return;
+
+        const freqLabels = {
+            'daily': '<span class="px-2 py-1 rounded bg-slate-700 text-xs">毎日</span>',
+            'weekdays': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-green-300">平日のみ</span>',
+            'weekly': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-blue-300">毎週</span>',
+            'monthly': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-purple-300">毎月</span>',
+            'end_of_month': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-orange-300">月末</span>',
+            'once': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-yellow-300">1回のみ</span>'
+        };
+        const weekDays = ['日', '月', '火', '水', '木', '金', '土'];
+
+        tbody.innerHTML = this.data.schedules.map(sch => {
+            const rpa = this.data.rpas.find(r => r.id === sch.rpaId);
+            const term = this.data.terminals.find(t => t.id === sch.terminalId);
+            const rpaName = rpa ? rpa.name : '<span class="text-red-400">不明なRPA</span>';
+            const termName = term ? term.name : '<span class="text-red-400">不明な端末</span>';
+            
+            let freqDetail = freqLabels[sch.frequency || 'daily'];
+            if (sch.frequency === 'weekly') freqDetail += `<span class="text-muted text-xs ml-1">(${weekDays[sch.dayOfWeek]}曜)</span>`;
+            if (sch.frequency === 'monthly') freqDetail += `<span class="text-muted text-xs ml-1">(${sch.dayOfMonth}日)</span>`;
+            if (sch.frequency === 'once') freqDetail += `<span class="text-muted text-xs ml-1">(${sch.date})</span>`;
+
+            const adminAction = this.state.isAdmin ? 
+                `<button class="btn btn-ghost btn-sm text-primary" onclick="App.showScheduleModal('${sch.id}')"><i data-feather="edit-2" width="14"></i> 編集</button>` : 
+                '-';
+
+            return `
+                <tr>
+                    <td class="font-bold">${rpaName}</td>
+                    <td>${termName}</td>
+                    <td>${freqDetail}</td>
+                    <td>${sch.startTime}</td>
+                    <td>${sch.endTime}</td>
+                    ${this.state.isAdmin ? `<td class="text-right">${adminAction}</td>` : ''}
+                </tr>
+            `;
+        }).join('');
+        
+        // Admin header column sync
+        const headRow = document.querySelector('#schedule-list-table thead tr');
+        if (headRow) {
+            const hasActionCol = headRow.lastElementChild.textContent === '操作';
+            if (this.state.isAdmin && !hasActionCol) {
+                headRow.insertAdjacentHTML('beforeend', '<th class="text-right">操作</th>');
+            } else if (!this.state.isAdmin && hasActionCol) {
+                headRow.lastElementChild.remove();
+            }
+        }
+
+        if (window.feather) feather.replace();
+    },
+
+    timeToMinutes(timeStr) {
+        if (!timeStr) return 0;
+        const [hours, mins] = timeStr.split(':').map(Number);
+        return (hours * 60) + (mins || 0);
+    },
+
+    hexToRgba(hex, alpha) {
+        let r = parseInt(hex.slice(1, 3), 16),
+            g = parseInt(hex.slice(3, 5), 16),
+            b = parseInt(hex.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    },
+
+    updateCurrentTimeLine() {
+        const now = new Date();
+        const mins = (now.getHours() * 60) + now.getMinutes();
+        const line = document.getElementById('current-time-line');
+        if(line) {
+            line.style.left = `${mins}px`;
+            // 現在時刻付近に自動スクロール (初回のみ)
+            const wrapper = document.getElementById('timeline-wrapper');
+            if(wrapper && wrapper.scrollLeft === 0 && mins > 200) {
+                // wrapper.scrollLeft = mins - 200; // optionally scroll to current time
+            }
+        }
+    },
+
+    // --- Schedule & Terminal Modal Actions ---
+
+    showScheduleModal(scheduleId = null) {
+        if (!this.state.isAdmin) return;
+        
+        // Populate Selects
+        const rpaSelect = document.getElementById('sch-rpa');
+        rpaSelect.innerHTML = '<option value="">選択してください</option>' + 
+            this.data.rpas.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+            
+        const termSelect = document.getElementById('sch-terminal');
+        termSelect.innerHTML = '<option value="">選択してください</option>' + 
+            this.data.terminals.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+
+        const modal = document.getElementById('schedule-modal');
+        const form = document.getElementById('sch-form');
+        form.reset();
+        
+        if (scheduleId) {
+            const sch = this.data.schedules.find(s => s.id === scheduleId);
+            if (sch) {
+                document.getElementById('sch-modal-title').textContent = 'スケジュールの編集';
+                document.getElementById('sch-id').value = sch.id;
+                document.getElementById('sch-rpa').value = sch.rpaId;
+                document.getElementById('sch-terminal').value = sch.terminalId;
+                document.getElementById('sch-start').value = sch.startTime;
+                document.getElementById('sch-end').value = sch.endTime;
+                document.getElementById('sch-frequency').value = sch.frequency || 'daily';
+                document.getElementById('sch-day-of-week').value = sch.dayOfWeek || '1';
+                document.getElementById('sch-day-of-month').value = sch.dayOfMonth || '';
+                document.getElementById('sch-once-date').value = sch.date || '';
+                document.getElementById('sch-delete-btn').style.display = 'block';
+            }
+        } else {
+            document.getElementById('sch-modal-title').textContent = 'スケジュールの登録';
+            document.getElementById('sch-id').value = ''; // FIX: Explicitly clear the hidden id
+            document.getElementById('sch-day-of-week').value = '1';
+            document.getElementById('sch-day-of-month').value = '';
+            document.getElementById('sch-once-date').value = '';
+            document.getElementById('sch-delete-btn').style.display = 'none';
+        }
+
+        // 頻度に応じた入力欄の表示切替イベントを発火
+        document.getElementById('sch-frequency').dispatchEvent(new Event('change'));
+
+        modal.classList.add('active');
+    },
+
+    hideScheduleModal() {
+        document.getElementById('schedule-modal').classList.remove('active');
+    },
+
+    saveSchedule() {
+        const id = document.getElementById('sch-id').value;
+        const newSch = {
+            id: id || 'sch-' + Date.now(),
+            rpaId: document.getElementById('sch-rpa').value,
+            terminalId: document.getElementById('sch-terminal').value,
+            startTime: document.getElementById('sch-start').value,
+            endTime: document.getElementById('sch-end').value,
+            frequency: document.getElementById('sch-frequency').value,
+            dayOfWeek: document.getElementById('sch-day-of-week').value,
+            dayOfMonth: document.getElementById('sch-day-of-month').value,
+            date: document.getElementById('sch-once-date').value
+        };
+
+        if (id) {
+            const index = this.data.schedules.findIndex(s => s.id === id);
+            if (index > -1) this.data.schedules[index] = newSch;
+        } else {
+            this.data.schedules.push(newSch);
+        }
+
+        this.saveData();
+        this.hideScheduleModal();
+        this.renderSchedule();
+    },
+
+    deleteSchedule() {
+        const id = document.getElementById('sch-id').value;
+        if (!id || !confirm('このスケジュールを削除しますか？')) return;
+        
+        this.data.schedules = this.data.schedules.filter(s => s.id !== id);
+        this.saveData();
+        this.hideScheduleModal();
+        this.renderSchedule();
+    },
+
+    showTerminalModal() {
+        if (!this.state.isAdmin) return;
+        this.renderTerminalList();
+        document.getElementById('terminal-modal').classList.add('active');
+    },
+
+    hideTerminalModal() {
+        document.getElementById('terminal-modal').classList.remove('active');
+        this.renderSchedule(); // Return to schedule and update headers
+    },
+
+    renderTerminalList() {
+        const tbody = document.getElementById('terminal-list-body');
+        tbody.innerHTML = this.data.terminals.map(t => `
+            <tr>
+                <td><span style="display:inline-block; width:14px; height:14px; border-radius:3px; background-color:${t.color || '#3b82f6'}; margin-right:8px; vertical-align:middle;"></span>${t.name}</td>
+                <td><span class="status-dot ${t.status === 'online' ? 'bg-success' : 'bg-gray'}"></span> Object</td>
+                <td class="text-right whitespace-nowrap">
+                    <button class="btn btn-ghost btn-sm text-primary mr-1" onclick="App.editTerminal('${t.id}')">
+                        <i data-feather="edit-2" width="14"></i>
+                    </button>
+                    <button class="btn btn-ghost btn-sm text-red-400" onclick="App.deleteTerminal('${t.id}')">
+                        <i data-feather="trash-2" width="14"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+        if (window.feather) feather.replace();
+    },
+
+    editTerminal(id) {
+        const term = this.data.terminals.find(t => t.id === id);
+        if (!term) return;
+        document.getElementById('term-edit-id').value = term.id;
+        document.getElementById('term-new-name').value = term.name;
+        document.getElementById('term-new-color').value = term.color || '#3b82f6';
+        
+        document.getElementById('term-form-title').textContent = '端末の編集';
+        document.getElementById('term-save-btn').innerHTML = '<i data-feather="save"></i> 更新';
+        document.getElementById('term-cancel-btn').style.display = 'block';
+        if (window.feather) feather.replace();
+    },
+
+    cancelEditTerminal() {
+        document.getElementById('term-edit-id').value = '';
+        document.getElementById('term-new-name').value = '';
+        document.getElementById('term-new-color').value = '#3b82f6';
+        
+        document.getElementById('term-form-title').textContent = '新しい端末を追加';
+        document.getElementById('term-save-btn').innerHTML = '<i data-feather="plus"></i> 追加';
+        document.getElementById('term-cancel-btn').style.display = 'none';
+        if (window.feather) feather.replace();
+    },
+
+    saveTerminal() {
+        const idInput = document.getElementById('term-edit-id');
+        const nameInput = document.getElementById('term-new-name');
+        const colorInput = document.getElementById('term-new-color');
+        
+        const id = idInput ? idInput.value : '';
+        const name = nameInput.value.trim();
+        const color = colorInput ? colorInput.value : '#3b82f6';
+        if (!name) return;
+
+        if (id) {
+            const index = this.data.terminals.findIndex(t => t.id === id);
+            if (index > -1) {
+                this.data.terminals[index].name = name;
+                this.data.terminals[index].color = color;
+            }
+        } else {
+            this.data.terminals.push({
+                id: 'term-' + Date.now(),
+                name: name,
+                color: color,
+                status: 'online'
+            });
+        }
+
+        this.saveData();
+        this.cancelEditTerminal();
+        this.renderTerminalList();
+    },
+
+    deleteTerminal(id) {
+        if (!confirm('この端末を削除しますか？関連するスケジュールも非表示になります。')) return;
+        this.data.terminals = this.data.terminals.filter(t => t.id !== id);
+        this.saveData();
+        this.renderTerminalList();
     }
 };
 
