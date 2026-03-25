@@ -1504,7 +1504,8 @@ const App = {
 
         // Generate headers
         const daysOfWeek = ['日', '月', '火', '水', '木', '金', '土'];
-        let html = daysOfWeek.map(d => `<div class="calendar-header-cell">${d}</div>`).join('');
+        const dayColors = ['color:#f87171;', '', '', '', '', '', 'color:#60a5fa;'];
+        let html = daysOfWeek.map((d, i) => `<div class="calendar-header-cell" style="${dayColors[i]}">${d}</div>`).join('');
 
         const firstDay = new Date(year, month, 1);
         const lastDay = new Date(year, month + 1, 0);
@@ -1575,8 +1576,9 @@ const App = {
                 `;
             }).join('');
 
+            const dateLabelStyle = dayOfWeek === 0 ? 'color:#f87171;' : dayOfWeek === 6 ? 'color:#60a5fa;' : '';
             html += `<div class="${cls}">
-                <div class="calendar-date-label">${day}</div>
+                <div class="calendar-date-label" style="${dateLabelStyle}">${day}</div>
                 ${eventsHtml}
             </div>`;
         }

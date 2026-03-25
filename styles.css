@@ -1123,7 +1123,7 @@ textarea.form-control {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 6px;
-    min-height: 100px;
+    min-height: 50px;
     display: flex;
     flex-direction: column;
     gap: 3px;
