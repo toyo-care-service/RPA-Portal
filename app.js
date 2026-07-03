@@ -34,75 +34,71 @@ const App = {
     },
 
     config: {
-        supabaseUrl: 'https://ltmgutcrlswymfpxiisu.supabase.co',
-        supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0bWd1dGNybHN3eW1mcHhpaXN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgxODYwMDQsImV4cCI6MjA4Mzc2MjAwNH0._QT-Br0x5Prli3jiD_bf-UoprH21Q1EzeobNwIfNQ-U',
+        apiUrl: 'https://script.google.com/macros/s/AKfycbxuezoDkAkYMaKUSWpTfIVx9tKewLsmwVZ-LcA_kjXYO4NxOW-3_wVw-zSmp_FxTp82/exec',
         hourlyWage: 1750,
         jsonPath: 'data/db.json'
     },
 
-    supabase: null,
-
     async init() {
         console.log('App initializing...');
 
-        // Initialize Supabase
-        if (this.config.supabaseUrl !== 'YOUR_SUPABASE_URL') {
-            this.supabase = window.supabase.createClient(this.config.supabaseUrl, this.config.supabaseKey);
-            await this.checkSession();
-        } else {
-            this.updateAuthUI(); // Ensure UI is updated even without Supabase
-        }
+        // まずローカルデータで即座に描画し、その後サーバーから最新を取得する
+        this.loadLocalData();
+        this.ensureDataDefaults();
 
         // インラインスタイルのリセット（詳細度問題の解決）
         document.querySelectorAll('.view-section').forEach(el => {
             el.style.display = '';
         });
 
-        await this.loadData();
         this.bindEvents();
         this.populateFilterOptions();
+        this.checkSession();
         this.handleRoute(); // 初期ルート処理
         feather.replace();
+
+        await this.loadData();
     },
 
     async loadData() {
         try {
-            // Priority: Supabase > LocalStorage > initialData
-            if (this.supabase) {
-                const { data, error } = await this.supabase
-                    .from('portal_data')
-                    .select('data')
-                    .eq('id', 'primary_state')
-                    .single();
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 20000);
+            const res = await fetch(`${this.config.apiUrl}?action=data`, {
+                redirect: 'follow',
+                signal: controller.signal
+            });
+            clearTimeout(timer);
+            const json = await res.json();
+            if (!json.ok) throw new Error(json.error || 'api_error');
 
-                if (!error && data) {
-                    this.data = data.data;
-                    console.log('Data loaded from Supabase');
-                    localStorage.setItem('rpa_portal_data', JSON.stringify(this.data));
-                } else {
-                    if (error) console.error('Supabase fetch error:', error);
-                    this.loadLocalData();
-                }
-            } else {
-                this.loadLocalData();
-            }
+            this.data = json.data;
+            this.ensureDataDefaults();
+            localStorage.setItem('rpa_portal_data', JSON.stringify(this.data));
+            console.log('Data loaded from API');
 
-            // Ensure missing top-level arrays exist (especially after db structure update)
-            if (!this.data.terminals) this.data.terminals = window.initialData?.terminals || [];
-            if (!this.data.schedules) this.data.schedules = window.initialData?.schedules || [];
-            if (!this.data.runs) this.data.runs = [];
-
-            // Default Quick Links if none exist
-            if (!this.data.quickLinks || this.data.quickLinks.length === 0) {
-                this.data.quickLinks = [
-                    { id: 'ql-1', name: 'RPAスケジュール', url: 'https://docs.google.com/spreadsheets/d/1fik8PJjDNwv4xfIseCUD8_oBqbxxOSlpuDM_6x1aP3I/edit?usp=sharing', icon: 'calendar' },
-                    { id: 'ql-2', name: 'RPA実績報告書', url: 'https://docs.google.com/spreadsheets/d/1aKg7bkAisIC4OCO_RPu7dTPpx1iOIhdnURYNgJma13U/edit?usp=sharing', icon: 'file-text' }
-                ];
-                this.saveData();
-            }
+            this.populateFilterOptions();
+            this.handleRoute();
+            feather.replace();
         } catch (error) {
             console.error('Data load error:', error);
-            alert('データの読み込みに失敗しました。');
+        }
+    },
+
+    ensureDataDefaults() {
+        if (!this.data) this.data = {};
+        ['rpas', 'runs', 'recordings', 'backlog'].forEach(k => {
+            if (!Array.isArray(this.data[k])) this.data[k] = [];
+        });
+        if (!this.data.terminals) this.data.terminals = window.initialData?.terminals || [];
+        if (!this.data.schedules) this.data.schedules = window.initialData?.schedules || [];
+
+        // Default Quick Links if none exist
+        if (!this.data.quickLinks || this.data.quickLinks.length === 0) {
+            this.data.quickLinks = [
+                { id: 'ql-1', name: 'RPAスケジュール', url: 'https://docs.google.com/spreadsheets/d/1fik8PJjDNwv4xfIseCUD8_oBqbxxOSlpuDM_6x1aP3I/edit?usp=sharing', icon: 'calendar' },
+                { id: 'ql-2', name: 'RPA実績報告書', url: 'https://docs.google.com/spreadsheets/d/1aKg7bkAisIC4OCO_RPu7dTPpx1iOIhdnURYNgJma13U/edit?usp=sharing', icon: 'file-text' }
+            ];
         }
     },
 
@@ -118,34 +114,63 @@ const App = {
         if (!this.data.quickLinks) this.data.quickLinks = [];
     },
 
-    async syncToSupabase() {
-        if (!this.supabase || !this.state.isAdmin) return;
+    async apiPost(payload) {
+        const res = await fetch(this.config.apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload),
+            redirect: 'follow'
+        });
+        return res.json();
+    },
+
+    async syncToServer() {
+        if (!this.state.isAdmin) return;
         try {
-            const { error } = await this.supabase
-                .from('portal_data')
-                .upsert({ id: 'primary_state', data: this.data });
-            if (error) throw error;
-            console.log('Data synced to Supabase');
+            const json = await this.apiPost({
+                action: 'save',
+                password: this.getAdminKey(),
+                data: this.data
+            });
+            if (!json.ok) throw new Error(json.error || 'save_failed');
+            console.log('Data synced to server');
+            if (json.addedToJisseki && json.addedToJisseki.length > 0) {
+                console.log('実績一覧に行追加:', json.addedToJisseki.join(', '));
+            }
         } catch (error) {
-            console.error('Supabase sync error:', error);
+            console.error('Server sync error:', error);
+            alert('サーバーへの保存に失敗しました。ネットワークを確認して再度保存してください。\n' + error.message);
         }
     },
 
     saveData() {
         localStorage.setItem('rpa_portal_data', JSON.stringify(this.data));
-        if (this.state.isAdmin && this.supabase) {
-            this.syncToSupabase();
+        if (this.state.isAdmin) {
+            this.syncToServer();
         }
     },
 
     // --- Auth Logic ---
 
+    getAdminKey() {
+        return localStorage.getItem('rpa_admin_key') || '';
+    },
+
     async checkSession() {
-        if (!this.supabase) return;
-        const { data: { session } } = await this.supabase.auth.getSession();
-        this.state.user = session?.user || null;
-        this.state.isAdmin = !!session?.user;
+        const key = this.getAdminKey();
+        this.state.isAdmin = !!key;
         this.updateAuthUI();
+        if (!key) return;
+        try {
+            const json = await this.apiPost({ action: 'login', password: key });
+            if (!json.ok) {
+                localStorage.removeItem('rpa_admin_key');
+                this.state.isAdmin = false;
+                this.updateAuthUI();
+            }
+        } catch (error) {
+            console.warn('Session check failed (offline?):', error);
+        }
     },
 
     showLoginModal() {
@@ -158,14 +183,19 @@ const App = {
     },
 
     async login() {
-        const email = document.getElementById('login-email').value;
         const password = document.getElementById('login-password').value;
+        if (!password) {
+            alert('パスワードを入力してください');
+            return;
+        }
 
         try {
-            const { data, error } = await this.supabase.auth.signInWithPassword({ email, password });
-            if (error) throw error;
+            const json = await this.apiPost({ action: 'login', password });
+            if (!json.ok) {
+                throw new Error(json.error === 'invalid_password' ? 'パスワードが違います' : (json.error || 'login_failed'));
+            }
 
-            this.state.user = data.user;
+            localStorage.setItem('rpa_admin_key', password);
             this.state.isAdmin = true;
             this.hideLoginModal();
             this.updateAuthUI();
@@ -177,7 +207,7 @@ const App = {
     },
 
     async logout() {
-        if (this.supabase) await this.supabase.auth.signOut();
+        localStorage.removeItem('rpa_admin_key');
         this.state.user = null;
         this.state.isAdmin = false;
         this.updateAuthUI();
@@ -884,6 +914,14 @@ const App = {
             } else {
                 document.getElementById('mode-scheduled').checked = true;
             }
+
+            // 実績一覧シートと連動しているRPAは数値実績をシート側で管理する
+            const lockMetrics = !!rpa.sheetLinked;
+            ['edit-savedHours', 'edit-runCount'].forEach(id => {
+                const el = document.getElementById(id);
+                el.disabled = lockMetrics;
+                el.title = lockMetrics ? '実績一覧シートで管理されています（シート側で編集してください）' : '';
+            });
         } else {
             // Create Mode
             document.getElementById('edit-page-title').textContent = 'RPA登録';
@@ -894,6 +932,12 @@ const App = {
             document.getElementById('edit-savedHours').value = '';
             document.getElementById('edit-runCount').value = '';
             document.getElementById('edit-recordingUrl').value = '';
+
+            ['edit-savedHours', 'edit-runCount'].forEach(id => {
+                const el = document.getElementById(id);
+                el.disabled = false;
+                el.title = '';
+            });
         }
 
         feather.replace();
@@ -955,7 +999,8 @@ const App = {
                 id: newId,
                 ...rpaData,
                 sheetUrl: sheets.length > 0 ? sheets[0].url : '', // Backward compatibility
-                createdAt: now
+                createdAt: now,
+                syncToSheet: true // 保存時に実績一覧シートへ行を自動追加
             };
             this.data.rpas.push(newRpa);
         }
