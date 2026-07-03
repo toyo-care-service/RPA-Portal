@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>RPA Portal データ救出</title>
+    <style>
+        body { font-family: sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+        button { padding: 10px 16px; margin: 4px 8px 4px 0; cursor: pointer; }
+        pre { background: #f4f4f5; padding: 12px; border-radius: 6px; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>RPA Portal データ救出ページ</h1>
+    <p>このページはアプリ本体を読み込まないため、開いてもブラウザ内のデータは変化しません。<br>
+        下のボタンでこのブラウザに残っているデータをダウンロードできます。</p>
+    <button onclick="dl('rpa_portal_data_backup')">旧データ(自動バックアップ)をダウンロード</button>
+    <button onclick="dl('rpa_portal_data')">現在のキャッシュをダウンロード</button>
+    <h3>このブラウザ内のデータ状況</h3>
+    <pre id="info"></pre>
+    <script>
+        function summary(key) {
+            const v = localStorage.getItem(key);
+            if (!v) return key + ': なし';
+            try {
+                const d = JSON.parse(v);
+                const rpas = d.rpas || [];
+                return key + ': RPA ' + rpas.length + '件 / リンク登録 '
+                    + rpas.filter(r => r.sheetUrl || (r.sheets && r.sheets.length)).length + '件 / 録画登録 '
+                    + rpas.filter(r => r.recordingUrl).length + '件 / 端末 '
+                    + (d.terminals || []).length + '件 / スケジュール '
+                    + (d.schedules || []).length + '件';
+            } catch (e) {
+                return key + ': 解析できません';
+            }
+        }
+        document.getElementById('info').textContent =
+            [summary('rpa_portal_data_backup'), summary('rpa_portal_data')].join('\n');
+        function dl(key) {
+            const v = localStorage.getItem(key);
+            if (!v) { alert('データがありません'); return; }
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([v], { type: 'application/json' }));
+            a.download = key + '.json';
+            a.click();
+        }
+    </script>
+</body>
+</html>

@@ -72,6 +72,12 @@ const App = {
             const json = await res.json();
             if (!json.ok) throw new Error(json.error || 'api_error');
 
+            // Supabase時代の旧キャッシュを上書き前に一度だけ退避（データ救出用）
+            const prev = localStorage.getItem('rpa_portal_data');
+            if (prev && !localStorage.getItem('rpa_portal_data_backup')) {
+                localStorage.setItem('rpa_portal_data_backup', prev);
+            }
+
             this.data = json.data;
             this.ensureDataDefaults();
             localStorage.setItem('rpa_portal_data', JSON.stringify(this.data));

@@ -88,6 +88,17 @@ function doPost(e) {
       return jsonOut({ ok: true });
     }
 
+    if (action === 'changePassword') {
+      if (!checkPassword(body.password)) {
+        return jsonOut({ ok: false, error: 'invalid_password' });
+      }
+      if (!body.newPassword || String(body.newPassword).length < 8) {
+        return jsonOut({ ok: false, error: 'password_too_short' });
+      }
+      PropertiesService.getScriptProperties().setProperty('ADMIN_PASSWORD', String(body.newPassword));
+      return jsonOut({ ok: true });
+    }
+
     if (action === 'login') {
       return jsonOut(checkPassword(body.password) ? { ok: true } : { ok: false, error: 'invalid_password' });
     }
