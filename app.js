@@ -909,11 +909,10 @@ const App = {
             document.getElementById('edit-tags').value = rpa.tags.join(', ');
             document.getElementById('edit-description').value = rpa.description || '';
 
-            if (rpa.operationMode === 'manual') {
-                document.getElementById('mode-manual').checked = true;
-            } else {
-                document.getElementById('mode-scheduled').checked = true;
-            }
+            const mode = rpa.operationMode === 'manual' ? 'manual' : 'scheduled';
+            document.getElementsByName('operationMode').forEach(el => {
+                el.checked = (el.value === mode);
+            });
 
             // 実績一覧シートと連動しているRPAは数値実績をシート側で管理する
             const lockMetrics = !!rpa.sheetLinked;
