@@ -706,7 +706,7 @@ const App = {
                 <td style="text-align: center;">${recordingIcon}</td>
                 <td class="text-right">${(rpa.savedMinutes / 60).toFixed(1)} h</td>
                 <td class="text-right font-bold">¥${rpa.savedAmount.toLocaleString()}</td>
-                <td><span style="font-size: 0.8rem; color: var(--text-muted);">${new Date(rpa.updatedAt).toLocaleDateString()}</span></td>
+                <td><span style="font-size: 0.8rem; color: var(--text-muted);">${rpa.updatedAt ? new Date(rpa.updatedAt).toLocaleDateString() : '-'}</span></td>
             `;
             tbody.appendChild(tr);
         });
