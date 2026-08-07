@@ -30,7 +30,13 @@ const App = {
         sortBacklogBy: 'priority',
         sortBacklogDesc: true,
         // Calendar State
-        calendarDate: new Date()
+        calendarDate: new Date(),
+        // Free Slot Finder State
+        freeTerminal: null,
+        freeCond: { freq: 'daily', dows: [1], dom: 1 },
+        freeDur: 30,
+        freeMonth: new Date(),
+        freeAllTerminals: true
     },
 
     config: {
@@ -98,6 +104,9 @@ const App = {
         });
         if (!this.data.terminals) this.data.terminals = window.initialData?.terminals || [];
         if (!this.data.schedules) this.data.schedules = window.initialData?.schedules || [];
+        this.normalizeSchedules();
+        this._occCache = {};
+        this._archivedMemo = {};
 
         // Default Quick Links if none exist
         if (!this.data.quickLinks || this.data.quickLinks.length === 0) {
@@ -150,6 +159,8 @@ const App = {
     },
 
     saveData() {
+        this._occCache = {};
+        this._archivedMemo = {};
         localStorage.setItem('rpa_portal_data', JSON.stringify(this.data));
         if (this.state.isAdmin) {
             this.syncToServer();
@@ -381,8 +392,33 @@ const App = {
                 document.getElementById('sch-weekly-options').style.display = val === 'weekly' ? 'block' : 'none';
                 document.getElementById('sch-monthly-options').style.display = val === 'monthly' ? 'block' : 'none';
                 document.getElementById('sch-once-options').style.display = val === 'once' ? 'block' : 'none';
+                this.renderScheduleModalConflict();
             });
         }
+        ['sch-terminal', 'sch-start', 'sch-end', 'sch-day-of-month', 'sch-once-date'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', () => this.renderScheduleModalConflict());
+        });
+
+        // Free Slot Finder Controls
+        document.querySelectorAll('#free-freq button').forEach(btn => {
+            btn.addEventListener('click', () => this.setFreeFreq(btn.dataset.f));
+        });
+        const freeDom = document.getElementById('free-dom');
+        if (freeDom) {
+            freeDom.innerHTML = Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}">${i + 1}日</option>`).join('');
+            freeDom.addEventListener('change', (e) => {
+                this.state.freeCond.dom = e.target.value;
+                this.renderFreeSlots();
+            });
+        }
+        document.getElementById('free-dur')?.addEventListener('change', (e) => {
+            this.state.freeDur = Number(e.target.value);
+            this.renderFreeSlots();
+        });
+        document.getElementById('free-allterm')?.addEventListener('change', (e) => {
+            this.state.freeAllTerminals = e.target.checked;
+            this.renderFreeCandidates();
+        });
     },
 
     handleRoute() {
@@ -1391,6 +1427,259 @@ const App = {
         this.renderQuickLinks();
     },
 
+    // --- Schedule Engine (空き枠判定・衝突検出) ---
+
+    // 「毎月N日」の曜日が全7曜日を一巡するのに最悪20ヶ月かかる(31日指定)。
+    // 1ヶ月だけ見ると「日付指定 × 曜日指定」の衝突を構造的に取りこぼす。
+    SCHED_HORIZON_MONTHS: 24,
+    WEEKDAY_LABELS: ['日', '月', '火', '水', '木', '金', '土'],
+
+    dateKey(d) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    },
+
+    addDays(d, n) {
+        const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        x.setDate(x.getDate() + n);
+        return x;
+    },
+
+    todayStart() {
+        const n = new Date();
+        return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    },
+
+    formatDateJp(d) {
+        return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}(${this.WEEKDAY_LABELS[d.getDay()]})`;
+    },
+
+    slotLabel(i) {
+        return `${String(Math.floor(i * 30 / 60)).padStart(2, '0')}:${String((i * 30) % 60).padStart(2, '0')}`;
+    },
+
+    slotEndLabel(i) {
+        return i >= 48 ? '24:00' : this.slotLabel(i);
+    },
+
+    normalizeSchedules() {
+        (this.data.schedules || []).forEach(s => {
+            if (Array.isArray(s.daysOfWeek)) {
+                s.daysOfWeek = s.daysOfWeek.map(Number).filter(n => n >= 0 && n <= 6);
+            } else if (s.dayOfWeek === '' || s.dayOfWeek === null || s.dayOfWeek === undefined) {
+                s.daysOfWeek = [];
+            } else {
+                s.daysOfWeek = [Number(s.dayOfWeek)];
+            }
+            if ((s.frequency || 'daily') === 'weekly' && !s.daysOfWeek.length) s.daysOfWeek = [1];
+        });
+    },
+
+    isScheduleArchived(s) {
+        if ((s.frequency || 'daily') !== 'once' || !s.date) return false;
+        if (!this._archivedMemo) this._archivedMemo = {};
+        if (this._archivedMemo[s.id] === undefined) {
+            const end = new Date(`${s.date}T23:59:59`);
+            this._archivedMemo[s.id] = !isNaN(end.getTime()) && end < new Date();
+        }
+        return this._archivedMemo[s.id];
+    },
+
+    scheduleActiveOn(s, d) {
+        const dow = d.getDay();
+        const day = d.getDate();
+        const f = s.frequency || 'daily';
+        if (f === 'daily') return true;
+        if (f === 'weekdays') return dow !== 0 && dow !== 6;
+        if (f === 'weekly') return (s.daysOfWeek || []).indexOf(dow) >= 0;
+        if (f === 'monthly') return Number(s.dayOfMonth) === day;
+        if (f === 'end_of_month') return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() === day;
+        if (f === 'once') return s.date === this.dateKey(d);
+        return false;
+    },
+
+    scheduleFreqLabel(s) {
+        const f = s.frequency || 'daily';
+        if (f === 'weekly') return '毎週' + (s.daysOfWeek || []).map(i => this.WEEKDAY_LABELS[i]).join('・') + '曜';
+        if (f === 'monthly') return `毎月${s.dayOfMonth}日`;
+        if (f === 'once') return `単発予約 ${this.escapeHtml(s.date)}`;
+        return { daily: '毎日', weekdays: '平日のみ', end_of_month: '毎月月末' }[f] || '毎日';
+    },
+
+    // 終了 <= 開始 の予定は翌日へ繰り越して占有させる
+    buildOccupancy(terminalId, from, nDays) {
+        if (!this._occCache) this._occCache = {};
+        const ck = `${terminalId}|${this.dateKey(from)}|${nDays}`;
+        if (this._occCache[ck]) return this._occCache[ck];
+
+        const idx = {};
+        for (let i = -1; i <= nDays + 1; i++) idx[this.dateKey(this.addDays(from, i))] = [];
+        const list = (this.data.schedules || []).filter(s => s.terminalId === terminalId && !this.isScheduleArchived(s));
+        for (let i = -1; i <= nDays; i++) {
+            const d = this.addDays(from, i);
+            const k = this.dateKey(d);
+            list.forEach(s => {
+                if (!this.scheduleActiveOn(s, d)) return;
+                const a = this.timeToMinutes(s.startTime);
+                const b = this.timeToMinutes(s.endTime);
+                if (b > a) {
+                    idx[k].push({ s, a, b });
+                    return;
+                }
+                idx[k].push({ s, a, b: 1440 });
+                const nk = this.dateKey(this.addDays(d, 1));
+                if (idx[nk] && b > 0) idx[nk].push({ s, a: 0, b, over: true });
+            });
+        }
+        this._occCache[ck] = idx;
+        return idx;
+    },
+
+    slotHits(occ, k, i) {
+        return (occ[k] || []).filter(x => x.a < (i + 1) * 30 && x.b > i * 30);
+    },
+
+    // 1日ぶんの占有を48コマへ一度だけ展開する（コマごとに全件走査すると1画面で数万回になる）
+    slotMap(occ, k) {
+        const map = new Array(48).fill(null);
+        (occ[k] || []).forEach(x => {
+            const from = Math.max(0, Math.floor(x.a / 30));
+            const to = Math.min(48, Math.ceil(x.b / 30));
+            for (let i = from; i < to; i++) {
+                if (!map[i]) map[i] = [];
+                map[i].push(x);
+            }
+        });
+        return map;
+    },
+
+    condTargetsDay(cond, d) {
+        const dow = d.getDay();
+        const day = d.getDate();
+        if (cond.freq === 'daily') return true;
+        if (cond.freq === 'weekdays') return dow !== 0 && dow !== 6;
+        if (cond.freq === 'weekly') return (cond.dows || []).indexOf(dow) >= 0;
+        if (cond.freq === 'monthly') return Number(cond.dom) === day;
+        if (cond.freq === 'end_of_month') return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() === day;
+        if (cond.freq === 'once') return cond.date === this.dateKey(d);
+        return true;
+    },
+
+    horizonRange() {
+        const from = this.todayStart();
+        const to = new Date(from.getFullYear(), from.getMonth() + this.SCHED_HORIZON_MONTHS, from.getDate());
+        return { from, nDays: Math.round((to - from) / 86400000) };
+    },
+
+    scheduleStats(terminalId, year, month, cond) {
+        const days = new Date(year, month + 1, 0).getDate();
+        const monthOcc = this.buildOccupancy(terminalId, new Date(year, month, 1), days);
+        const monthStat = Array.from({ length: 48 }, () => ({ tgt: 0, busy: 0, hits: [] }));
+        for (let dd = 1; dd <= days; dd++) {
+            const d = new Date(year, month, dd);
+            if (!this.condTargetsDay(cond, d)) continue;
+            const map = this.slotMap(monthOcc, this.dateKey(d));
+            for (let i = 0; i < 48; i++) {
+                monthStat[i].tgt++;
+                const hits = map[i];
+                if (!hits) continue;
+                monthStat[i].busy++;
+                hits.forEach(x => monthStat[i].hits.push({ d, s: x.s, over: x.over }));
+            }
+        }
+
+        const { from, nDays } = this.horizonRange();
+        const horOcc = this.buildOccupancy(terminalId, from, nDays);
+        const horStat = Array.from({ length: 48 }, () => ({ tgt: 0, busy: 0, first: null, who: new Map() }));
+        for (let i = 0; i <= nDays; i++) {
+            const d = this.addDays(from, i);
+            if (!this.condTargetsDay(cond, d)) continue;
+            const map = this.slotMap(horOcc, this.dateKey(d));
+            for (let j = 0; j < 48; j++) {
+                horStat[j].tgt++;
+                const hits = map[j];
+                if (!hits) continue;
+                horStat[j].busy++;
+                if (!horStat[j].first) horStat[j].first = d;
+                hits.forEach(x => {
+                    if (!horStat[j].who.has(x.s.id)) horStat[j].who.set(x.s.id, { s: x.s, first: d });
+                });
+            }
+        }
+        return { month: monthStat, horizon: horStat, occ: monthOcc, days };
+    },
+
+    freeRanges(stat, minMinutes) {
+        const out = [];
+        let start = null;
+        for (let i = 0; i < 48; i++) {
+            const free = stat[i].tgt > 0 && stat[i].busy === 0;
+            if (free) {
+                if (start === null) start = i;
+            } else if (start !== null) {
+                out.push([start, i]);
+                start = null;
+            }
+        }
+        if (start !== null) out.push([start, 48]);
+        return out.filter(r => (r[1] - r[0]) * 30 >= Number(minMinutes));
+    },
+
+    scanScheduleConflicts() {
+        const { from, nDays } = this.horizonRange();
+        const out = [];
+        (this.data.terminals || []).forEach(t => {
+            const occ = this.buildOccupancy(t.id, from, nDays);
+            const acc = new Map();
+            for (let i = 0; i <= nDays; i++) {
+                const d = this.addDays(from, i);
+                const items = occ[this.dateKey(d)] || [];
+                for (let a = 0; a < items.length; a++) {
+                    for (let b = a + 1; b < items.length; b++) {
+                        const X = items[a];
+                        const Y = items[b];
+                        if (X.s.id === Y.s.id) continue;
+                        if (!(X.a < Y.b && X.b > Y.a)) continue;
+                        const pk = [X.s.id, Y.s.id].sort().join('|');
+                        if (!acc.has(pk)) acc.set(pk, { terminal: t, a: X.s, b: Y.s, first: d, count: 0 });
+                        acc.get(pk).count++;
+                    }
+                }
+            }
+            acc.forEach(v => out.push(v));
+        });
+        return out.sort((x, y) => x.first - y.first);
+    },
+
+    findScheduleConflicts(terminalId, startTime, endTime, cond, excludeId) {
+        const { from, nDays } = this.horizonRange();
+        const occ = this.buildOccupancy(terminalId, from, nDays);
+        const a = this.timeToMinutes(startTime);
+        const b = this.timeToMinutes(endTime);
+        const overnight = b <= a;
+        const found = new Map();
+        for (let i = 0; i <= nDays; i++) {
+            const d = this.addDays(from, i);
+            if (!this.condTargetsDay(cond, d)) continue;
+            const dk = this.dateKey(d);
+            const segs = overnight
+                ? [[dk, a, 1440, false], [this.dateKey(this.addDays(d, 1)), 0, b, true]]
+                : [[dk, a, b, false]];
+            segs.forEach(seg => {
+                const [k, x, y, isNextDay] = seg;
+                if (y <= x) return;
+                // 繰り越し分の衝突は「翌日側の日付」で報告する（開始日で出すと平日判定と食い違って見える）
+                const hitDate = isNextDay ? this.addDays(d, 1) : d;
+                (occ[k] || []).forEach(o => {
+                    if (o.s.id === excludeId) return;
+                    if (!(o.a < y && o.b > x)) return;
+                    if (!found.has(o.s.id)) found.set(o.s.id, { s: o.s, first: hitDate, count: 0, nextDay: isNextDay });
+                    found.get(o.s.id).count++;
+                });
+            });
+        }
+        return [...found.values()].sort((x, y) => x.first - y.first);
+    },
+
     // --- Schedule Timeline (Gantt) ---
 
     renderSchedule() {
@@ -1409,9 +1698,6 @@ const App = {
         
         const selectedDate = new Date(dateInput.value);
         const targetDate = selectedDate;
-        const dayOfWeek = targetDate.getDay(); // 0(Sun) - 6(Sat)
-        const dayOfMonth = targetDate.getDate();
-        const isLastDayOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate() === dayOfMonth;
 
         // 1. ヘッダーの描画 (0:00 - 23:00)
         const headersHtml = Array.from({length: 24}, (_, i) => `<div class="time-header-slot">${i}:00</div>`).join('');
@@ -1421,28 +1707,23 @@ const App = {
         let terminalsHtml = '';
         let rowsHtml = '';
 
+        const timelineDayKey = this.dateKey(targetDate);
+
         this.data.terminals.forEach(terminal => {
             terminalsHtml += `<div class="schedule-cell row-header"><span style="display:inline-block; width:10px; height:10px; border-radius:2px; background-color:${terminal.color || '#3b82f6'}; margin-right:6px;"></span> ${terminal.name}</div>`;
-            
-            const termSchedules = this.data.schedules.filter(s => {
-                if (s.terminalId !== terminal.id) return false;
-                if (!s.frequency || s.frequency === 'daily') return true;
-                if (s.frequency === 'weekdays' && dayOfWeek !== 0 && dayOfWeek !== 6) return true;
-                if (s.frequency === 'weekly' && Number(s.dayOfWeek) === dayOfWeek) return true;
-                if (s.frequency === 'monthly' && Number(s.dayOfMonth) === dayOfMonth) return true;
-                if (s.frequency === 'end_of_month' && isLastDayOfMonth) return true;
-                if (s.frequency === 'once' && s.date === dateInput.value) return true;
-                return false;
-            });
+
+            const occ = this.buildOccupancy(terminal.id, targetDate, 0);
+            const termSchedules = (occ[timelineDayKey] || []).slice().sort((a, b) => a.a - b.a);
 
             let blocksHtml = '';
 
-            termSchedules.forEach(sch => {
+            termSchedules.forEach(item => {
+                const sch = item.s;
                 const rpa = this.data.rpas.find(r => r.id === sch.rpaId);
                 if(!rpa) return;
 
-                const startMins = this.timeToMinutes(sch.startTime);
-                const endMins = this.timeToMinutes(sch.endTime);
+                const startMins = item.a;
+                const endMins = item.b;
                 const widthPx = Math.max(endMins - startMins, 15); // 最低15px幅を確保
 
                 // ステータス判定 (最新のrunsから取得)
@@ -1463,11 +1744,12 @@ const App = {
 
                 const tColor = terminal.color || '#3b82f6';
                 const bgRgba = this.hexToRgba(tColor, 0.2);
+                const overMark = item.over ? '前日から継続 / ' : (endMins === 1440 && this.timeToMinutes(sch.endTime) <= this.timeToMinutes(sch.startTime) ? '翌日へ継続 / ' : '');
 
                 blocksHtml += `
-                    <div class="schedule-block" style="left: ${startMins}px; width: ${widthPx}px; border-left: 3px solid ${tColor}; background-color: ${bgRgba}; ${cursorStyle}" title="${rpa.name}\n${sch.startTime} - ${sch.endTime}" ${clickEvent}>
+                    <div class="schedule-block" style="left: ${startMins}px; width: ${widthPx}px; border-left: 3px solid ${tColor}; background-color: ${bgRgba}; ${cursorStyle}" title="${rpa.name}\n${overMark}${sch.startTime} - ${sch.endTime}" ${clickEvent}>
                         <div class="truncate flex items-center" style="font-size: 11px; margin-bottom: 2px;">${statusDotHtml}<i data-feather="${iconName}" style="width:10px; height:10px; margin-right:4px;"></i> ${rpa.name}</div>
-                        <div style="font-size: 9px; opacity: 0.8;">${sch.startTime} - ${sch.endTime}</div>
+                        <div style="font-size: 9px; opacity: 0.8;">${overMark}${sch.startTime} - ${sch.endTime}</div>
                     </div>
                 `;
             });
@@ -1502,6 +1784,8 @@ const App = {
         // Populate List View and Calendar View
         this.renderScheduleList();
         this.renderCalendar();
+        this.renderFreeSlots();
+        this.renderScheduleAlerts();
     },
 
     changeScheduleDate(offset) {
@@ -1574,24 +1858,14 @@ const App = {
 
         for(let day = 1; day <= totalDays; day++) {
             const currentDate = new Date(year, month, day);
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const dayOfWeek = currentDate.getDay();
             
             const isToday = isCurrentMonth && day === today.getDate();
             let cls = `calendar-cell ${isToday ? 'today' : ''}`;
             
-            const isLastDayOfMonth = day === totalDays;
-
             // Find schedules for this day
-            const daySchedules = this.data.schedules.filter(s => {
-                if (!s.frequency || s.frequency === 'daily') return true;
-                if (s.frequency === 'weekdays' && dayOfWeek !== 0 && dayOfWeek !== 6) return true;
-                if (s.frequency === 'weekly' && Number(s.dayOfWeek) === dayOfWeek) return true;
-                if (s.frequency === 'monthly' && Number(s.dayOfMonth) === day) return true;
-                if (s.frequency === 'end_of_month' && isLastDayOfMonth) return true;
-                if (s.frequency === 'once' && s.date === dateStr) return true;
-                return false;
-            });
+            const daySchedules = this.data.schedules.filter(s =>
+                !this.isScheduleArchived(s) && this.scheduleActiveOn(s, currentDate));
 
             // Sort by time
             daySchedules.sort((a,b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
@@ -1652,26 +1926,28 @@ const App = {
         const freqLabels = {
             'daily': '<span class="px-2 py-1 rounded bg-slate-700 text-xs">毎日</span>',
             'weekdays': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-green-300">平日のみ</span>',
-            'weekly': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-blue-300">毎週</span>',
-            'monthly': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-purple-300">毎月</span>',
+            'weekly': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-blue-300">曜日指定</span>',
+            'monthly': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-purple-300">日付指定</span>',
             'end_of_month': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-orange-300">月末</span>',
-            'once': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-yellow-300">1回のみ</span>'
+            'once': '<span class="px-2 py-1 rounded bg-slate-700 text-xs text-yellow-300">単発予約</span>'
         };
-        const weekDays = ['日', '月', '火', '水', '木', '金', '土'];
 
-        tbody.innerHTML = this.data.schedules.map(sch => {
+        const rowHtml = (sch) => {
             const rpa = this.data.rpas.find(r => r.id === sch.rpaId);
             const term = this.data.terminals.find(t => t.id === sch.terminalId);
             const rpaName = rpa ? rpa.name : '<span class="text-red-400">不明なRPA</span>';
             const termName = term ? term.name : '<span class="text-red-400">不明な端末</span>';
-            
-            let freqDetail = freqLabels[sch.frequency || 'daily'];
-            if (sch.frequency === 'weekly') freqDetail += `<span class="text-muted text-xs ml-1">(${weekDays[sch.dayOfWeek]}曜)</span>`;
-            if (sch.frequency === 'monthly') freqDetail += `<span class="text-muted text-xs ml-1">(${sch.dayOfMonth}日)</span>`;
-            if (sch.frequency === 'once') freqDetail += `<span class="text-muted text-xs ml-1">(${sch.date})</span>`;
 
-            const adminAction = this.state.isAdmin ? 
-                `<button class="btn btn-ghost btn-sm text-primary" onclick="App.showScheduleModal('${sch.id}')"><i data-feather="edit-2" width="14"></i> 編集</button>` : 
+            let freqDetail = freqLabels[sch.frequency || 'daily'];
+            if (sch.frequency === 'weekly') freqDetail += `<span class="sched-hint-inline">(${(sch.daysOfWeek || []).map(i => this.WEEKDAY_LABELS[i]).join('・')}曜)</span>`;
+            if (sch.frequency === 'monthly') freqDetail += `<span class="sched-hint-inline">(${sch.dayOfMonth}日)</span>`;
+            if (sch.frequency === 'once') freqDetail += `<span class="sched-hint-inline">(${sch.date})</span>`;
+
+            const overnight = this.timeToMinutes(sch.endTime) <= this.timeToMinutes(sch.startTime);
+            const endLabel = overnight ? `${sch.endTime}<span class="sched-hint-inline">翌日</span>` : sch.endTime;
+
+            const adminAction = this.state.isAdmin ?
+                `<button class="btn btn-ghost btn-sm text-primary" onclick="App.showScheduleModal('${sch.id}')"><i data-feather="edit-2" width="14"></i> 編集</button>` :
                 '-';
 
             return `
@@ -1680,11 +1956,29 @@ const App = {
                     <td>${termName}</td>
                     <td>${freqDetail}</td>
                     <td>${sch.startTime}</td>
-                    <td>${sch.endTime}</td>
+                    <td>${endLabel}</td>
                     ${this.state.isAdmin ? `<td class="text-right">${adminAction}</td>` : ''}
                 </tr>
             `;
-        }).join('');
+        };
+
+        const active = this.data.schedules.filter(s => !this.isScheduleArchived(s));
+        const archived = this.data.schedules.filter(s => this.isScheduleArchived(s));
+        tbody.innerHTML = active.map(rowHtml).join('');
+
+        const archiveBox = document.getElementById('schedule-archive');
+        if (archiveBox) {
+            archiveBox.innerHTML = archived.length ? `
+                <div class="sched-alert note">
+                    <div class="hd"><i data-feather="archive" width="14"></i> 終了した単発予約 ${archived.length}件（枠は解放済み・空き枠判定と衝突判定から除外）</div>
+                    <ul>${archived.map(s => {
+                        const rpa = this.data.rpas.find(r => r.id === s.rpaId);
+                        const term = this.data.terminals.find(t => t.id === s.terminalId);
+                        const del = this.state.isAdmin ? ` <button class="btn btn-ghost btn-sm text-primary" onclick="App.showScheduleModal('${s.id}')">開く</button>` : '';
+                        return `<li>・${this.escapeHtml(rpa ? rpa.name : '不明なRPA')} ${this.escapeHtml(s.date)} ${s.startTime}–${s.endTime}（${this.escapeHtml(term ? term.name : '不明な端末')}）${del}</li>`;
+                    }).join('')}</ul>
+                </div>` : '';
+        }
         
         // Admin header column sync
         const headRow = document.querySelector('#schedule-list-table thead tr');
@@ -1698,6 +1992,268 @@ const App = {
         }
 
         if (window.feather) feather.replace();
+    },
+
+    // --- Free Slot Finder ---
+
+    freeCondLabel() {
+        const c = this.state.freeCond;
+        if (c.freq === 'weekly') return c.dows.map(i => this.WEEKDAY_LABELS[i]).join('・') + '曜';
+        if (c.freq === 'monthly') return `${c.dom}日`;
+        return { daily: '毎日', weekdays: '平日のみ' }[c.freq] || '毎日';
+    },
+
+    setFreeTerminal(id) {
+        this.state.freeTerminal = id;
+        this.renderFreeSlots();
+    },
+
+    setFreeFreq(freq) {
+        this.state.freeCond.freq = freq;
+        this.renderFreeSlots();
+    },
+
+    toggleFreeDow(i) {
+        const cur = this.state.freeCond.dows;
+        const next = cur.indexOf(i) >= 0 ? cur.filter(x => x !== i) : cur.concat(i);
+        this.state.freeCond.dows = next.length ? next.sort((a, b) => a - b) : [i];
+        this.renderFreeSlots();
+    },
+
+    changeFreeMonth(delta) {
+        const d = new Date(this.state.freeMonth.getFullYear(), this.state.freeMonth.getMonth() + delta, 1);
+        this.state.freeMonth = d;
+        this.renderFreeSlots();
+    },
+
+    resetFreeMonth() {
+        this.state.freeMonth = new Date();
+        this.renderFreeSlots();
+    },
+
+    renderFreeSlots() {
+        const grid = document.getElementById('free-heatmap');
+        if (!grid) return;
+        const terminals = this.data.terminals || [];
+        if (!terminals.length) {
+            grid.innerHTML = '';
+            document.getElementById('free-chips').innerHTML = '<div class="free-none">端末が登録されていません。</div>';
+            return;
+        }
+        if (!this.state.freeTerminal || !terminals.some(t => t.id === this.state.freeTerminal)) {
+            this.state.freeTerminal = terminals[0].id;
+        }
+
+        const cond = this.state.freeCond;
+        const term = terminals.find(t => t.id === this.state.freeTerminal);
+        const year = this.state.freeMonth.getFullYear();
+        const month = this.state.freeMonth.getMonth();
+
+        document.getElementById('free-month-title').textContent = `${year}年${month + 1}月`;
+        document.getElementById('free-terminals').innerHTML = terminals.map(t =>
+            `<button class="${t.id === term.id ? 'active' : ''}" onclick="App.setFreeTerminal('${t.id}')"><span class="term-dot" style="background:${t.color || '#3b82f6'}"></span>${this.escapeHtml(t.name)}</button>`).join('');
+        document.querySelectorAll('#free-freq button').forEach(b => b.classList.toggle('active', b.dataset.f === cond.freq));
+        document.getElementById('free-dow').style.display = cond.freq === 'weekly' ? '' : 'none';
+        document.getElementById('free-dom').style.display = cond.freq === 'monthly' ? '' : 'none';
+        document.getElementById('free-dow').innerHTML = this.WEEKDAY_LABELS.map((w, i) => {
+            const on = cond.dows.indexOf(i) >= 0 ? ' active' : '';
+            const tone = i === 0 ? ' sun' : i === 6 ? ' sat' : '';
+            return `<button type="button" class="${tone}${on}" onclick="App.toggleFreeDow(${i})">${w}</button>`;
+        }).join('');
+
+        const stats = this.scheduleStats(term.id, year, month, cond);
+        this._freeStats = { stats, year, month, termId: term.id };
+
+        const dur = this.state.freeDur;
+        const good = this.freeRanges(stats.horizon, dur);
+        document.getElementById('free-sum-head').textContent =
+            `${term.name} ／ ${this.freeCondLabel()} ／ ${dur}分以上 → ${this.SCHED_HORIZON_MONTHS}ヶ月ずっと空いている枠`;
+        document.getElementById('free-chips').innerHTML = good.length
+            ? good.map(r => `<div class="free-chip"${this.state.isAdmin ? ` onclick="App.useFreeSlot('${term.id}','${this.slotLabel(r[0])}','${this.slotEndLabel(r[1])}')"` : ' style="cursor:default"'}><i data-feather="check" width="12"></i>${this.slotLabel(r[0])} – ${this.slotEndLabel(r[1])}<span class="len">${(r[1] - r[0]) * 30}分</span></div>`).join('')
+            : `<div class="free-none"><i data-feather="alert-triangle" width="14"></i>この条件で${this.SCHED_HORIZON_MONTHS}ヶ月ずっと空いている枠はありません。所要時間を短くするか、他の端末を確認してください。</div>`;
+
+        const traps = [];
+        for (let i = 0; i < 48; i++) {
+            if (stats.month[i].tgt > 0 && stats.month[i].busy === 0 && stats.horizon[i].busy > 0) traps.push(i);
+        }
+        const noteBox = document.getElementById('free-note');
+        if (stats.month[0].tgt === 0) {
+            // 「31日」を選んで30日以下の月を表示した場合など
+            noteBox.innerHTML = `この月に該当日はありません（下のグリッドは参考表示です）。上の緑の枠は${this.SCHED_HORIZON_MONTHS}ヶ月ぶんで判定しているのでそのまま使えます。`;
+        } else {
+            noteBox.innerHTML = traps.length
+                ? `対象日 ${stats.month[0].tgt}日／月　<span class="trap-text">この月は空きに見えるのに将来ふさがる時間帯が ${traps.length} コマ（30分単位）</span>：最も早いのは ${this.slotLabel(traps[0])}〜 の ${this.formatDateJp(stats.horizon[traps[0]].first)}`
+                : `対象日 ${stats.month[0].tgt}日／月　この月の空きと${this.SCHED_HORIZON_MONTHS}ヶ月の空きは一致しています。`;
+        }
+
+        let html = '<thead><tr><th class="hm-rowlab"></th>';
+        for (let i = 0; i < 48; i++) html += `<th class="hm-hcol ${i % 2 === 0 ? 'hm-hour' : ''}">${i % 2 === 0 ? i / 2 : ''}</th>`;
+        html += `</tr><tr><td class="hm-sumlab">${this.SCHED_HORIZON_MONTHS}ヶ月<br>まとめ</td>`;
+        for (let i = 0; i < 48; i++) {
+            const o = stats.horizon[i];
+            const cls = o.tgt === 0 ? '' : o.busy === 0 ? 'free' : o.busy === o.tgt ? 'busy' : 'part';
+            html += `<td class="hm-sumcell ${cls} ${i % 2 === 0 ? 'hm-hour' : ''}" data-i="${i}" data-r="h" onmouseenter="App.showFreeDetail(this)"></td>`;
+        }
+        html += '</tr><tr><td class="hm-sumlab">この月<br>まとめ</td>';
+        for (let i = 0; i < 48; i++) {
+            const o = stats.month[i];
+            let cls = o.tgt === 0 ? '' : o.busy === 0 ? 'free' : o.busy === o.tgt ? 'busy' : 'part';
+            if (cls === 'free' && stats.horizon[i].busy > 0) cls = 'trap';
+            html += `<td class="hm-sumcell ${cls} ${i % 2 === 0 ? 'hm-hour' : ''}" data-i="${i}" data-r="m" onmouseenter="App.showFreeDetail(this)"></td>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        const todayKey = this.dateKey(new Date());
+        const tColor = term.color || '#3b82f6';
+        for (let dd = 1; dd <= stats.days; dd++) {
+            const d = new Date(year, month, dd);
+            const dw = d.getDay();
+            const isTarget = this.condTargetsDay(cond, d);
+            const isToday = this.dateKey(d) === todayKey;
+            const tone = dw === 0 ? 'sun' : dw === 6 ? 'sat' : '';
+            html += `<tr class="${isTarget ? '' : 'hm-off'}"><td class="hm-rowlab ${tone} ${isToday ? 'today' : ''}">${month + 1}/${dd}(${this.WEEKDAY_LABELS[dw]})</td>`;
+            const map = this.slotMap(stats.occ, this.dateKey(d));
+            for (let i = 0; i < 48; i++) {
+                const hits = map[i];
+                const style = hits ? ` style="--hm-bc:${this.hexToRgba(tColor, Math.min(0.3 + hits.length * 0.3, 0.95))}"` : '';
+                html += `<td class="hm-cell ${hits ? 'busy' : ''} ${i % 2 === 0 ? 'hm-hour' : ''}" data-d="${dd}" data-i="${i}"${style} onmouseenter="App.showFreeDetail(this)"></td>`;
+            }
+            html += '</tr>';
+        }
+        grid.innerHTML = html + '</tbody>';
+
+        this.renderFreeCandidates();
+        document.getElementById('free-detail').innerHTML = '<div class="k">セル詳細</div><span class="sched-hint">グリッドやサマリ帯にマウスを当てると内訳が出ます。</span>';
+        feather.replace();
+    },
+
+    showFreeDetail(cell) {
+        const box = document.getElementById('free-detail');
+        if (!box || !this._freeStats) return;
+        const { stats, year, month } = this._freeStats;
+        const i = Number(cell.dataset.i);
+        const label = `${this.slotLabel(i)} – ${this.slotEndLabel(i + 1)}`;
+
+        if (cell.dataset.d) {
+            const d = new Date(year, month, Number(cell.dataset.d));
+            const hits = this.slotHits(stats.occ, this.dateKey(d), i);
+            box.innerHTML = `<div class="k">${this.formatDateJp(d)} ${label}</div>` + (hits.length
+                ? hits.map(x => `<div class="hit"><strong>${this.rpaNameOf(x.s.rpaId)}</strong><span class="meta">${x.s.startTime}–${x.s.endTime} ／ ${this.scheduleFreqLabel(x.s)}</span>${x.over ? '<span class="meta">前日から日跨ぎ</span>' : ''}</div>`).join('')
+                : '<span class="sched-hint">空き</span>');
+            return;
+        }
+
+        if (cell.dataset.r === 'h') {
+            const o = stats.horizon[i];
+            const who = [...o.who.values()].sort((a, b) => a.first - b.first);
+            box.innerHTML = `<div class="k">${label} ／ ${this.SCHED_HORIZON_MONTHS}ヶ月判定：対象 ${o.tgt}日中 ${o.tgt - o.busy}日 空き</div>` + (who.length
+                ? who.slice(0, 12).map(v => `<div class="hit"><span class="d">初回 ${this.formatDateJp(v.first)}</span><strong>${this.rpaNameOf(v.s.rpaId)}</strong><span class="meta">${v.s.startTime}–${v.s.endTime} ／ ${this.scheduleFreqLabel(v.s)}</span></div>`).join('')
+                : `<span class="sched-hint">${this.SCHED_HORIZON_MONTHS}ヶ月ずっと空いています。安心して登録できます。</span>`);
+            return;
+        }
+
+        const o = stats.month[i];
+        const hz = stats.horizon[i];
+        let head = `<div class="k">${label} ／ この月：対象 ${o.tgt}日中 ${o.tgt - o.busy}日 空き</div>`;
+        if (o.busy === 0 && hz.busy > 0) {
+            const who = [...hz.who.values()].sort((a, b) => a.first - b.first);
+            box.innerHTML = head + `<div class="sched-alert future"><div class="hd"><i data-feather="alert-triangle" width="14"></i> この月は空きですが、将来ふさがります</div>` +
+                who.map(v => `<div>・${this.formatDateJp(v.first)} から <strong>${this.rpaNameOf(v.s.rpaId)}</strong>（${this.scheduleFreqLabel(v.s)} ${v.s.startTime}–${v.s.endTime}）</div>`).join('') + '</div>';
+            feather.replace();
+            return;
+        }
+        const uniq = [...new Map(o.hits.map(x => [x.s.id + this.dateKey(x.d), x])).values()];
+        box.innerHTML = head + (uniq.length
+            ? uniq.slice(0, 12).map(x => `<div class="hit"><span class="d">${x.d.getMonth() + 1}/${x.d.getDate()}</span><strong>${this.rpaNameOf(x.s.rpaId)}</strong><span class="meta">${x.s.startTime}–${x.s.endTime}</span></div>`).join('')
+            : '<span class="sched-hint">この月は空いています。</span>');
+    },
+
+    renderFreeCandidates() {
+        const box = document.getElementById('free-cands');
+        if (!box) return;
+        const cond = this.state.freeCond;
+        const dur = Number(this.state.freeDur);
+        const year = this.state.freeMonth.getFullYear();
+        const month = this.state.freeMonth.getMonth();
+        const targets = this.state.freeAllTerminals
+            ? (this.data.terminals || [])
+            : (this.data.terminals || []).filter(t => t.id === this.state.freeTerminal);
+
+        const out = [];
+        targets.forEach(t => {
+            const st = this.scheduleStats(t.id, year, month, cond);
+            this.freeRanges(st.horizon, dur).forEach(r => out.push({ t, a: r[0], b: r[1], len: (r[1] - r[0]) * 30 }));
+        });
+        out.sort((x, y) => y.len - x.len);
+
+        box.innerHTML = out.length ? out.map((o, i) => `
+            <div class="free-cand ${i === 0 ? 'best' : ''}">
+                <div class="cand-term"><span class="term-dot" style="background:${o.t.color || '#3b82f6'}"></span>${this.escapeHtml(o.t.name)}${i === 0 ? '（最有力）' : ''}</div>
+                <div class="cand-time">${this.slotLabel(o.a)} – ${this.slotEndLabel(o.b)}</div>
+                <div class="cand-meta">連続${o.len}分 ／ 必要${dur}分に対し余裕${o.len - dur}分</div>
+                ${this.state.isAdmin ? `<button class="btn btn-primary btn-sm" onclick="App.useFreeSlot('${o.t.id}','${this.slotLabel(o.a)}','${this.slotEndLabel(o.b)}')"><i data-feather="plus" width="12"></i> この枠で登録</button>` : ''}
+            </div>`).join('') : '<div class="free-none">条件に合う枠がありません。</div>';
+        feather.replace();
+    },
+
+    useFreeSlot(terminalId, start, end) {
+        if (!this.state.isAdmin) {
+            alert('スケジュールの登録は管理者ログインが必要です。');
+            return;
+        }
+        this.showScheduleModal();
+        document.getElementById('sch-terminal').value = terminalId;
+        document.getElementById('sch-start').value = start;
+        document.getElementById('sch-end').value = end === '24:00' ? '23:59' : end;
+        document.getElementById('sch-frequency').value = this.state.freeCond.freq;
+        this.state.modalDows = this.state.freeCond.dows.slice();
+        if (this.state.freeCond.freq === 'monthly') {
+            document.getElementById('sch-day-of-month').value = this.state.freeCond.dom;
+        }
+        this.renderModalDowPicker();
+        document.getElementById('sch-frequency').dispatchEvent(new Event('change'));
+    },
+
+    // --- Conflict Alerts ---
+
+    renderScheduleAlerts() {
+        const nowBox = document.getElementById('alerts-now');
+        const futureBox = document.getElementById('alerts-future');
+        const badge = document.getElementById('alert-badge');
+        if (!nowBox || !futureBox) return;
+
+        const conflicts = this.scanScheduleConflicts();
+        const monthEnd = new Date();
+        monthEnd.setMonth(monthEnd.getMonth() + 1);
+        const now = conflicts.filter(c => c.first <= monthEnd);
+        const future = conflicts.filter(c => c.first > monthEnd);
+
+        if (badge) {
+            badge.textContent = conflicts.length;
+            badge.style.display = conflicts.length ? '' : 'none';
+        }
+
+        const table = (rows, tone) => `
+            <div class="conflict-table">
+                <div class="conflict-row head"><span>初回</span><span>予定A</span><span>予定B</span><span>端末 ／ 回数</span></div>
+                ${rows.map(c => `
+                    <div class="conflict-row">
+                        <span class="when ${tone}">${this.formatDateJp(c.first)}</span>
+                        <span><strong>${this.rpaNameOf(c.a.rpaId)}</strong><br><span class="meta">${c.a.startTime}–${c.a.endTime} ／ ${this.scheduleFreqLabel(c.a)}</span></span>
+                        <span><strong>${this.rpaNameOf(c.b.rpaId)}</strong><br><span class="meta">${c.b.startTime}–${c.b.endTime} ／ ${this.scheduleFreqLabel(c.b)}</span></span>
+                        <span class="meta"><span class="term-dot" style="display:inline-block;background:${c.terminal.color || '#3b82f6'}"></span> ${this.escapeHtml(c.terminal.name)}<br>${this.SCHED_HORIZON_MONTHS}ヶ月で${c.count}回</span>
+                    </div>`).join('')}
+            </div>`;
+
+        nowBox.innerHTML = now.length
+            ? `<div class="sched-alert warn"><div class="hd"><i data-feather="alert-triangle" width="14"></i> いま重複している：${now.length}件</div></div>` + table(now, 'now')
+            : `<div class="sched-alert ok"><div class="hd"><i data-feather="check" width="14"></i> 直近1ヶ月に重複はありません</div></div>`;
+
+        futureBox.innerHTML = future.length
+            ? `<div class="sched-alert future"><div class="hd"><i data-feather="clock" width="14"></i> 今月は無事だが将来重複する：${future.length}件（表示中の月だけを見ても見つかりません）</div></div>` + table(future, 'future')
+            : `<div class="sched-alert ok"><div class="hd"><i data-feather="check" width="14"></i> ${this.SCHED_HORIZON_MONTHS}ヶ月先まで、新たに重複する組み合わせはありません</div></div>`;
+
+        feather.replace();
     },
 
     timeToMinutes(timeStr) {
@@ -1755,7 +2311,7 @@ const App = {
                 document.getElementById('sch-start').value = sch.startTime;
                 document.getElementById('sch-end').value = sch.endTime;
                 document.getElementById('sch-frequency').value = sch.frequency || 'daily';
-                document.getElementById('sch-day-of-week').value = sch.dayOfWeek || '1';
+                this.state.modalDows = (sch.daysOfWeek && sch.daysOfWeek.length) ? sch.daysOfWeek.slice() : [1];
                 document.getElementById('sch-day-of-month').value = sch.dayOfMonth || '';
                 document.getElementById('sch-once-date').value = sch.date || '';
                 document.getElementById('sch-delete-btn').style.display = 'block';
@@ -1763,16 +2319,104 @@ const App = {
         } else {
             document.getElementById('sch-modal-title').textContent = 'スケジュールの登録';
             document.getElementById('sch-id').value = ''; // FIX: Explicitly clear the hidden id
-            document.getElementById('sch-day-of-week').value = '1';
+            this.state.modalDows = [1];
             document.getElementById('sch-day-of-month').value = '';
             document.getElementById('sch-once-date').value = '';
             document.getElementById('sch-delete-btn').style.display = 'none';
         }
 
+        this.renderModalDowPicker();
+
         // 頻度に応じた入力欄の表示切替イベントを発火
         document.getElementById('sch-frequency').dispatchEvent(new Event('change'));
 
         modal.classList.add('active');
+        feather.replace();
+    },
+
+    renderModalDowPicker() {
+        const box = document.getElementById('sch-dow-picker');
+        if (!box) return;
+        if (!this.state.modalDows || !this.state.modalDows.length) this.state.modalDows = [1];
+        box.innerHTML = this.WEEKDAY_LABELS.map((w, i) => {
+            const on = this.state.modalDows.indexOf(i) >= 0 ? ' active' : '';
+            const tone = i === 0 ? ' sun' : i === 6 ? ' sat' : '';
+            return `<button type="button" class="${tone}${on}" onclick="App.toggleModalDow(${i})">${w}</button>`;
+        }).join('');
+    },
+
+    toggleModalDow(i) {
+        const cur = this.state.modalDows || [1];
+        const next = cur.indexOf(i) >= 0 ? cur.filter(x => x !== i) : cur.concat(i);
+        this.state.modalDows = next.length ? next.sort((a, b) => a - b) : [i];
+        this.renderModalDowPicker();
+        this.renderScheduleModalConflict();
+    },
+
+    renderScheduleModalConflict() {
+        const box = document.getElementById('sch-conflict');
+        if (!box) return;
+        const terminalId = document.getElementById('sch-terminal').value;
+        const start = document.getElementById('sch-start').value;
+        const end = document.getElementById('sch-end').value;
+        const freq = document.getElementById('sch-frequency').value;
+        const excludeId = document.getElementById('sch-id').value || null;
+
+        if (!terminalId || !start || !end) {
+            box.innerHTML = '';
+            return;
+        }
+
+        const cond = {
+            freq,
+            dows: this.state.modalDows || [1],
+            dom: document.getElementById('sch-day-of-month').value,
+            date: document.getElementById('sch-once-date').value
+        };
+        if (freq === 'monthly' && !cond.dom) { box.innerHTML = ''; return; }
+        if (freq === 'once' && !cond.date) { box.innerHTML = ''; return; }
+
+        const term = this.data.terminals.find(t => t.id === terminalId);
+        const overnight = this.timeToMinutes(end) <= this.timeToMinutes(start);
+        const hits = this.findScheduleConflicts(terminalId, start, end, cond, excludeId);
+
+        const oneMonthLater = new Date();
+        oneMonthLater.setMonth(oneMonthLater.getMonth() + 1);
+        const soon = hits.filter(h => h.first <= oneMonthLater);
+        const later = hits.filter(h => h.first > oneMonthLater);
+
+        const line = (h) => `<li>・<strong>${this.rpaNameOf(h.s.rpaId)}</strong> ${h.s.startTime}–${h.s.endTime}（${this.scheduleFreqLabel(h.s)}） → 初回 ${this.formatDateJp(h.first)}${h.nextDay ? '（翌日ぶん）' : ''} ／ ${this.SCHED_HORIZON_MONTHS}ヶ月で${h.count}回</li>`;
+
+        let html = '';
+        if (!hits.length) {
+            html += `<div class="sched-alert ok"><div class="hd"><i data-feather="check" width="14"></i> ${this.SCHED_HORIZON_MONTHS}ヶ月先まで重複はありません</div>
+                <span>${term ? this.escapeHtml(term.name) : ''} ／ ${start}–${end}${overnight ? '（日跨ぎ）' : ''}</span></div>`;
+        } else {
+            if (soon.length) {
+                html += `<div class="sched-alert warn"><div class="hd"><i data-feather="alert-triangle" width="14"></i> すぐに重複します（1ヶ月以内）：${soon.length}件</div><ul>${soon.map(line).join('')}</ul></div>`;
+            }
+            if (later.length) {
+                html += `<div class="sched-alert future"><div class="hd"><i data-feather="clock" width="14"></i> いまは重複しませんが、将来ぶつかります：${later.length}件</div><ul>${later.map(line).join('')}</ul>
+                    <div style="margin-top:6px">日付指定と曜日指定が同じ時間帯にあるため、条件が揃った月だけ重複します。</div></div>`;
+            }
+        }
+        if (overnight) {
+            html += `<div class="sched-alert note"><div class="hd"><i data-feather="clock" width="14"></i> 日をまたぐ設定です</div>
+                <span>翌日 00:00–${end} も占有として扱い、翌日側の予定とも突き合わせます。</span></div>`;
+        }
+        box.innerHTML = html;
+        feather.replace();
+    },
+
+    rpaNameOf(rpaId) {
+        const rpa = this.data.rpas.find(r => r.id === rpaId);
+        return this.escapeHtml(rpa ? rpa.name : '不明なRPA');
+    },
+
+    escapeHtml(v) {
+        return String(v == null ? '' : v)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     },
 
     hideScheduleModal() {
@@ -1781,6 +2425,7 @@ const App = {
 
     saveSchedule() {
         const id = document.getElementById('sch-id').value;
+        const dows = (this.state.modalDows && this.state.modalDows.length) ? this.state.modalDows.slice().sort((a, b) => a - b) : [1];
         const newSch = {
             id: id || 'sch-' + Date.now(),
             rpaId: document.getElementById('sch-rpa').value,
@@ -1788,7 +2433,8 @@ const App = {
             startTime: document.getElementById('sch-start').value,
             endTime: document.getElementById('sch-end').value,
             frequency: document.getElementById('sch-frequency').value,
-            dayOfWeek: document.getElementById('sch-day-of-week').value,
+            daysOfWeek: dows,
+            dayOfWeek: String(dows[0]), // 旧フォーマットしか読まない箇所との互換用
             dayOfMonth: document.getElementById('sch-day-of-month').value,
             date: document.getElementById('sch-once-date').value
         };

@@ -512,9 +512,11 @@
                         <header class="flex flex-wrap items-center justify-between mb-4 gap-y-3">
                             <div class="flex flex-wrap items-center gap-2 md:gap-3">
                                 <div class="flex bg-slate-800 rounded-md p-1 border border-slate-700 whitespace-nowrap">
-                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors active tab-btn text-main" data-tab="timeline">タイムライン</button>
+                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors active tab-btn text-main" data-tab="free">空き枠</button>
+                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors tab-btn text-muted" data-tab="timeline">タイムライン</button>
                                     <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors tab-btn text-muted" data-tab="calendar">カレンダー</button>
                                     <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors tab-btn text-muted" data-tab="list">一覧リスト</button>
+                                    <button class="px-2 md:px-3 py-1 text-xs md:text-sm font-medium rounded transition-colors tab-btn text-muted" data-tab="alerts">衝突アラート <span id="alert-badge" class="alert-badge" style="display:none">0</span></button>
                                 </div>
 
                                 <div class="flex items-center gap-1 whitespace-nowrap">
@@ -528,8 +530,65 @@
                             </div>
                         </header>
                         
+                        <!-- Free Slot View -->
+                        <div id="tab-free" class="tab-pane active" style="flex: 1; overflow-y: auto;">
+                            <div class="free-cond">
+                                <span class="free-cond-label">端末</span>
+                                <div class="free-seg" id="free-terminals"></div>
+                                <span class="free-cond-label">登録したいRPAの条件</span>
+                                <div class="free-seg" id="free-freq">
+                                    <button class="active" data-f="daily">毎日</button>
+                                    <button data-f="weekdays">平日のみ</button>
+                                    <button data-f="weekly">曜日指定</button>
+                                    <button data-f="monthly">日付指定</button>
+                                </div>
+                                <div class="dow-picker" id="free-dow" style="display:none"></div>
+                                <select id="free-dom" class="form-select form-select-sm" style="display:none"></select>
+                                <span class="free-cond-label">所要時間</span>
+                                <select id="free-dur" class="form-select form-select-sm">
+                                    <option value="10">10分</option>
+                                    <option value="30" selected>30分</option>
+                                    <option value="60">60分</option>
+                                    <option value="120">120分</option>
+                                    <option value="180">180分</option>
+                                    <option value="240">240分</option>
+                                </select>
+                                <div class="free-cond-nav">
+                                    <button class="btn btn-ghost btn-sm px-2" onclick="App.changeFreeMonth(-1)"><i data-feather="chevron-left"></i></button>
+                                    <strong id="free-month-title" style="min-width:96px;text-align:center">--年--月</strong>
+                                    <button class="btn btn-ghost btn-sm px-2" onclick="App.changeFreeMonth(1)"><i data-feather="chevron-right"></i></button>
+                                    <button class="btn btn-secondary btn-sm" onclick="App.resetFreeMonth()">今月</button>
+                                </div>
+                            </div>
+
+                            <div class="free-summary">
+                                <h4 id="free-sum-head"></h4>
+                                <div class="free-chips" id="free-chips"></div>
+                                <div class="free-note" id="free-note"></div>
+                            </div>
+
+                            <div class="free-layout">
+                                <div>
+                                    <div class="heatmap-scroll"><table class="heatmap" id="free-heatmap"></table></div>
+                                    <div class="heatmap-legend">
+                                        <span><i class="hm-sw hm-free"></i>24ヶ月ずっと空き</span>
+                                        <span><i class="hm-sw hm-trap"></i>この月は空きだが将来ふさがる</span>
+                                        <span><i class="hm-sw hm-part"></i>一部の日だけ埋まる</span>
+                                        <span><i class="hm-sw hm-busy"></i>全対象日で埋まり</span>
+                                        <span class="text-muted">セルにマウスを当てると内訳が出ます</span>
+                                    </div>
+                                    <div class="free-detail" id="free-detail"></div>
+                                </div>
+                                <div class="free-side">
+                                    <h4>端末をまたいだ候補</h4>
+                                    <label class="free-check"><input type="checkbox" id="free-allterm" checked> 全端末から探す</label>
+                                    <div id="free-cands"></div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Timeline View -->
-                        <div id="tab-timeline" class="tab-pane active flex-pane" style="flex: 1; min-height: 0;">
+                        <div id="tab-timeline" class="tab-pane flex-pane" style="flex: 1; min-height: 0;">
                             <div class="flex flex-wrap items-center gap-2 md:gap-3 mb-4">
                                 <label class="text-sm text-muted font-bold whitespace-nowrap">表示日付:</label>
                                 <div class="flex items-center">
@@ -590,6 +649,14 @@
                                     </tbody>
                                 </table>
                             </div>
+                            <div id="schedule-archive" class="mt-4"></div>
+                        </div>
+
+                        <!-- Conflict Alerts View -->
+                        <div id="tab-alerts" class="tab-pane" style="flex: 1; overflow-y: auto;">
+                            <p class="sched-hint mb-4">同じ端末で時間帯が重なる予定を、<strong>今日から24ヶ月ぶん</strong>展開して検出します。「毎月◯日」と「毎週◯曜」のように、条件が揃った月にだけ衝突する組み合わせも拾います。</p>
+                            <div id="alerts-now"></div>
+                            <div id="alerts-future" class="mt-4"></div>
                         </div>
                     </div>
                 </div>
@@ -707,32 +774,26 @@
                     <select id="sch-frequency" class="form-select">
                         <option value="daily">毎日 (Daily)</option>
                         <option value="weekdays">平日のみ (Weekdays)</option>
-                        <option value="weekly">毎週 (Weekly)</option>
-                        <option value="monthly">毎月 (Monthly)</option>
+                        <option value="weekly">曜日指定（複数可）</option>
+                        <option value="monthly">日付指定 (Monthly)</option>
                         <option value="end_of_month">毎月の月末 (End of Month)</option>
-                        <option value="once">1回のみ (Once)</option>
+                        <option value="once">単発予約（指定日だけ押さえる）</option>
                     </select>
                 </div>
                 <div class="form-group mb-4" id="sch-weekly-options" style="display: none;">
-                    <label class="form-label">曜日 <span class="text-red-400">*</span></label>
-                    <select id="sch-day-of-week" class="form-select">
-                        <option value="1">月曜日</option>
-                        <option value="2">火曜日</option>
-                        <option value="3">水曜日</option>
-                        <option value="4">木曜日</option>
-                        <option value="5">金曜日</option>
-                        <option value="6">土曜日</option>
-                        <option value="0">日曜日</option>
-                    </select>
+                    <label class="form-label">曜日 <span class="text-red-400">*</span><span class="sched-hint-inline">複数選べます</span></label>
+                    <div class="dow-picker" id="sch-dow-picker"></div>
                 </div>
                 <div class="form-group mb-4" id="sch-monthly-options" style="display: none;">
                     <label class="form-label">日付 <span class="text-red-400">*</span></label>
                     <input type="number" id="sch-day-of-month" class="form-control" min="1" max="31" placeholder="例: 15">
                 </div>
                 <div class="form-group mb-4" id="sch-once-options" style="display: none;">
-                    <label class="form-label">指定日 <span class="text-red-400">*</span></label>
+                    <label class="form-label">予約日 <span class="text-red-400">*</span></label>
                     <input type="date" id="sch-once-date" class="form-control">
+                    <p class="sched-hint">この日が過ぎると自動でアーカイブされ、枠が解放されます。</p>
                 </div>
+                <div id="sch-conflict"></div>
                 <div class="flex justify-between mt-6">
                     <button type="button" id="sch-delete-btn" class="btn btn-danger" style="display:none; color: #FCA5A5; background: rgba(220, 38, 38, 0.2);" onclick="App.deleteSchedule()">
                         <i data-feather="trash-2" width="14"></i> 削除
